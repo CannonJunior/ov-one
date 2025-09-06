@@ -13,14 +13,27 @@
   <link href="https://cesium.com/downloads/cesiumjs/releases/1.133/Build/Cesium/Widgets/widgets.css" rel="stylesheet">
   
   <style>
-    #toolbar {
+    body {
+      margin: 0;
+      padding: 0;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    }
+
+    #cesiumContainer {
+      width: calc(100% - 350px);
+      height: 100vh;
+      float: left;
+    }
+
+    #add-object-toolbar {
       position: absolute;
       top: 10px;
       left: 10px;
-      background: rgba(42, 42, 42, 0.8);
+      background: rgba(42, 42, 42, 0.9);
       padding: 10px;
       border-radius: 5px;
       z-index: 100;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.3);
     }
     
     #modelSelect {
@@ -28,14 +41,193 @@
       color: white;
       border: 1px solid #666;
       border-radius: 3px;
-      padding: 5px;
-      font-family: sans-serif;
+      padding: 8px 12px;
+      font-family: inherit;
       font-size: 14px;
+      cursor: pointer;
     }
     
     #modelSelect option {
       background: #444;
       color: white;
+    }
+
+    #objects-panel {
+      width: 350px;
+      height: 100vh;
+      float: right;
+      background: #2a2a2a;
+      color: white;
+      padding: 20px;
+      box-sizing: border-box;
+      overflow-y: auto;
+      border-left: 1px solid #444;
+    }
+
+    #objects-panel h3 {
+      margin-top: 0;
+      margin-bottom: 15px;
+      color: #fff;
+      font-size: 18px;
+    }
+
+    .object-card {
+      background: #363636;
+      border: 1px solid #555;
+      border-radius: 8px;
+      padding: 15px;
+      margin-bottom: 15px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+    }
+
+    .object-card h4 {
+      margin: 0 0 10px 0;
+      color: #4a9eff;
+      font-size: 16px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .object-info {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+      font-size: 12px;
+    }
+
+    .object-info div {
+      display: flex;
+      justify-content: space-between;
+      padding: 4px 0;
+      border-bottom: 1px solid #444;
+    }
+
+    .object-info label {
+      color: #aaa;
+      font-weight: 500;
+    }
+
+    .object-info span {
+      color: #fff;
+      font-family: 'Courier New', monospace;
+    }
+
+    .editable {
+      background: transparent;
+      border: none;
+      color: #fff;
+      font-family: 'Courier New', monospace;
+      font-size: 12px;
+      text-align: right;
+      width: 80px;
+    }
+
+    .editable:focus {
+      background: #444;
+      outline: 1px solid #4a9eff;
+    }
+
+    .object-controls {
+      display: flex;
+      gap: 8px;
+      margin-top: 10px;
+    }
+
+    .btn {
+      background: #4a9eff;
+      color: white;
+      border: none;
+      padding: 4px 8px;
+      border-radius: 3px;
+      cursor: pointer;
+      font-size: 11px;
+    }
+
+    .btn:hover {
+      background: #3a8eef;
+    }
+
+    .btn.danger {
+      background: #ff4757;
+    }
+
+    .btn.danger:hover {
+      background: #ff3a4f;
+    }
+
+    .flight-planning {
+      margin-top: 15px;
+      padding-top: 10px;
+      border-top: 1px solid #555;
+    }
+
+    .flight-controls {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 10px;
+      align-items: center;
+    }
+
+    .flight-status {
+      font-size: 11px;
+      color: #aaa;
+      margin-left: 10px;
+    }
+
+    .waypoint-list {
+      max-height: 120px;
+      overflow-y: auto;
+      background: #2a2a2a;
+      border: 1px solid #555;
+      border-radius: 3px;
+      margin-top: 8px;
+    }
+
+    .waypoint-item {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 4px 8px;
+      border-bottom: 1px solid #444;
+      font-size: 11px;
+    }
+
+    .waypoint-item:last-child {
+      border-bottom: none;
+    }
+
+    .waypoint-coords {
+      color: #4a9eff;
+      font-family: 'Courier New', monospace;
+    }
+
+    .waypoint-controls {
+      display: flex;
+      gap: 4px;
+    }
+
+    .btn-small {
+      background: #666;
+      color: white;
+      border: none;
+      padding: 2px 6px;
+      border-radius: 2px;
+      cursor: pointer;
+      font-size: 10px;
+    }
+
+    .btn-small:hover {
+      background: #777;
+    }
+
+    .planning-mode {
+      background: #2d4a2d !important;
+      border-color: #4a9a4a !important;
+    }
+
+    .planning-mode h4 {
+      color: #4a9a4a !important;
     }
   </style>
 
@@ -45,90 +237,995 @@
 
   <div id="cesiumContainer"></div>
   
-  <div id="toolbar">
+  <div id="add-object-toolbar">
     <select id="modelSelect">
-      <option value="">Select a Model</option>
+      <option value="">Add New Object</option>
     </select>
   </div>
 
-  <script type="module">
-    // Your access token can be found at: https://ion.cesium.com/tokens.
-    // Access token from config.json
+  <div id="objects-panel">
+    <h3>Active Objects</h3>
+    <div id="object-cards-container"></div>
+  </div>
 
+  <script type="module">
+    // Multi-Object Tracking System
     Cesium.Ion.defaultAccessToken = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiJmNGU2YTQwYi05ZGFkLTQ5ZWYtOTJlNC0zY2EwNmUzZDA4MGYiLCJpZCI6MzM4ODAyLCJpYXQiOjE3NTcwOTUxMzd9.gDyQcH0fKKNQxGIQjzSyjbQt1tjWDERbZt4eUna9Xbc';
 
-    // Initialize the Cesium Viewer with model-focused settings
+    // Initialize Cesium Viewer
     const viewer = new Cesium.Viewer("cesiumContainer", {
-      infoBox: false,
-      selectionIndicator: false,
       shadows: true,
       shouldAnimate: true,
     });
 
-    function createModel(url, height) {
-      viewer.entities.removeAll();
+    // Fly to San Francisco startup view
+    viewer.camera.flyTo({
+      destination: Cesium.Cartesian3.fromDegrees(-122.4175, 37.655, 400),
+      orientation: {
+        heading: Cesium.Math.toRadians(0.0),
+        pitch: Cesium.Math.toRadians(-15.0),
+      }
+    });
 
-      const position = Cesium.Cartesian3.fromDegrees(
-        -123.0744619,
-        44.0503706,
-        height,
-      );
-      const heading = Cesium.Math.toRadians(135);
-      const pitch = 0;
-      const roll = 0;
-      const hpr = new Cesium.HeadingPitchRoll(heading, pitch, roll);
-      const orientation = Cesium.Transforms.headingPitchRollQuaternion(position, hpr);
+    // Global object management
+    let objects = [];
+    let nextObjectId = 1;
 
-      const entity = viewer.entities.add({
-        name: url,
-        position: position,
-        orientation: orientation,
-        model: {
-          uri: url,
-          minimumPixelSize: 128,
-          maximumScale: 20000,
-        },
-      });
-      viewer.trackedEntity = entity;
+    // Object data structure
+    class TrackedObject {
+      constructor(type, modelUrl, platform, initialHeading = null) {
+        this.id = nextObjectId++;
+        this.type = type;
+        this.modelUrl = modelUrl;
+        this.platform = platform;
+        
+        // Calculated from Cesium entity
+        this.longitude = -122.4175 + (Math.random() - 0.5) * 0.1;
+        this.latitude = 37.655 + (Math.random() - 0.5) * 0.1;
+        this.altitude = 10000 + Math.random() * 20000;
+        this.speed = 0;
+        this.heading = initialHeading !== null ? initialHeading : Math.random() * 360; // Random heading 0-360 degrees
+        this.pitch = 0;
+        this.roll = 0;
+        
+        // Editable metadata
+        this.country = 'USA';
+        this.callsign = `${type}${String(this.id).padStart(2, '0')}`;
+        this.fuel = '75%';
+        this.timeOnStation = '2h 15m';
+        this.loadout = 'Standard';
+        this.status = 'Active';
+        this.mission = 'CAP';
+        this.task = 'Patrol';
+        this.flightPlan = 'None';
+        
+        // Flight planning
+        this.waypoints = [];
+        this.flightPath = null;
+        this.isPlanning = false;
+        this.isFlying = false;
+        this.flightProgress = 0;
+        this.flightSpeed = 250; // knots
+        this.flightStartTime = null;
+        
+        this.entity = null;
+        this.createEntity();
+      }
+
+      createEntity() {
+        const position = Cesium.Cartesian3.fromDegrees(
+          this.longitude,
+          this.latitude,
+          this.altitude
+        );
+
+        // Convert from true north (0° = north) to Cesium system (0° = east)
+        // Subtract 90 degrees to convert from geographic heading to Cesium heading
+        const cesiumHeading = this.heading - 90;
+        const headingRadians = Cesium.Math.toRadians(cesiumHeading);
+        const pitchRadians = Cesium.Math.toRadians(this.pitch);
+        const rollRadians = Cesium.Math.toRadians(this.roll);
+        const hpr = new Cesium.HeadingPitchRoll(headingRadians, pitchRadians, rollRadians);
+        const orientation = Cesium.Transforms.headingPitchRollQuaternion(position, hpr);
+
+        this.entity = viewer.entities.add({
+          id: `object_${this.id}`,
+          name: this.callsign,
+          position: position,
+          orientation: orientation,
+          model: {
+            uri: this.modelUrl,
+            minimumPixelSize: 128,
+            maximumScale: 20000,
+          },
+        });
+      }
+
+      updateCalculatedFields() {
+        if (!this.entity) return;
+        
+        const currentTime = viewer.clock.currentTime;
+        const position = this.entity.position.getValue(currentTime);
+        let previousPosition = null;
+        
+        // Get previous position for speed calculation
+        const previousTime = Cesium.JulianDate.addSeconds(currentTime, -1, new Cesium.JulianDate());
+        try {
+          previousPosition = this.entity.position.getValue(previousTime);
+        } catch (e) {
+          // Handle case where previous time is outside the sample range
+          previousPosition = null;
+        }
+        
+        if (position) {
+          const cartographic = Cesium.Cartographic.fromCartesian(position);
+          this.longitude = Cesium.Math.toDegrees(cartographic.longitude);
+          this.latitude = Cesium.Math.toDegrees(cartographic.latitude);
+          this.altitude = cartographic.height;
+          
+          // Calculate speed if we have a previous position
+          if (previousPosition && this.isFlying) {
+            const distance = Cesium.Cartesian3.distance(previousPosition, position);
+            this.speed = distance * 1.94384; // Convert m/s to knots
+          } else if (!this.isFlying) {
+            this.speed = 0;
+          }
+        }
+
+        const orientation = this.entity.orientation?.getValue(currentTime);
+        if (orientation) {
+          try {
+            // Convert quaternion to heading/pitch/roll
+            const matrix = Cesium.Matrix3.fromQuaternion(orientation, new Cesium.Matrix3());
+            const hpr = Cesium.Transforms.fixedFrameToHeadingPitchRoll(
+              Cesium.Transforms.eastNorthUpToFixedFrame(position),
+              orientation
+            );
+            
+            // Convert from Cesium coordinates back to geographic coordinates
+            const cesiumHeading = Cesium.Math.toDegrees(hpr.heading);
+            this.heading = ((cesiumHeading + 90) % 360 + 360) % 360; // Convert back to true north
+            this.pitch = Cesium.Math.toDegrees(hpr.pitch);
+            this.roll = Cesium.Math.toDegrees(hpr.roll);
+          } catch (e) {
+            // Fallback to stored values if calculation fails
+          }
+        }
+        
+        // Update flight-specific data
+        if (this.isFlying) {
+          this.updateFlightData();
+        }
+      }
+      
+      updateFlightData() {
+        if (!this.flightStartTime) return;
+        
+        const elapsedTime = (Date.now() - this.flightStartTime) / 1000; // seconds
+        const elapsedMinutes = Math.floor(elapsedTime / 60);
+        const elapsedSeconds = Math.floor(elapsedTime % 60);
+        
+        // Update time on station (flight time)
+        this.timeOnStation = `${elapsedMinutes}m ${elapsedSeconds}s`;
+        
+        // Simple fuel consumption model (1% per minute of flight)
+        if (this.originalFuel === undefined) {
+          this.originalFuel = parseFloat(this.fuel.replace('%', '')) || 75;
+        }
+        
+        const fuelConsumptionRate = 1.0; // 1% per minute
+        const consumedFuel = (elapsedMinutes * fuelConsumptionRate);
+        const remainingFuel = Math.max(0, this.originalFuel - consumedFuel);
+        this.fuel = `${remainingFuel.toFixed(0)}%`;
+        
+        // Update status based on flight progress
+        if (remainingFuel <= 10) {
+          this.status = 'Low Fuel';
+        } else if (remainingFuel <= 25) {
+          this.status = 'Fuel Warning';
+        } else {
+          this.status = 'Flying';
+        }
+      }
+
+      addWaypoint(longitude, latitude, altitude) {
+        this.waypoints.push({
+          longitude: longitude,
+          latitude: latitude,
+          altitude: altitude || 10000,
+          id: Date.now()
+        });
+        this.updateFlightPath();
+      }
+
+      removeWaypoint(waypointId) {
+        this.waypoints = this.waypoints.filter(wp => wp.id !== waypointId);
+        this.updateFlightPath();
+      }
+
+      updateFlightPath() {
+        if (this.flightPath) {
+          viewer.entities.remove(this.flightPath);
+          this.flightPath = null;
+        }
+
+        if (this.waypoints.length > 1) {
+          const positions = this.waypoints.map(wp => 
+            Cesium.Cartesian3.fromDegrees(wp.longitude, wp.latitude, wp.altitude)
+          );
+
+          this.flightPath = viewer.entities.add({
+            id: `flightPath_${this.id}`,
+            name: `${this.callsign} Flight Path`,
+            polyline: {
+              positions: positions,
+              width: 3,
+              material: Cesium.Color.CYAN,
+              clampToGround: false,
+              followSurface: false,
+            }
+          });
+        }
+      }
+
+      startFlight() {
+        if (this.waypoints.length < 2) return;
+        
+        this.isFlying = true;
+        this.flightProgress = 0;
+        this.flightStartTime = Date.now();
+        
+        // Store original fuel level for consumption tracking
+        if (this.originalFuel === undefined) {
+          this.originalFuel = parseFloat(this.fuel.replace('%', '')) || 75;
+        }
+
+        // Create flight animation
+        const totalDistance = this.calculateTotalDistance();
+        const flightDuration = (totalDistance / this.flightSpeed) * 3600; // seconds
+
+        const positions = this.waypoints.map(wp => 
+          Cesium.Cartesian3.fromDegrees(wp.longitude, wp.latitude, wp.altitude)
+        );
+
+        // Create smooth spline path with realistic flight dynamics
+        const flightData = [];
+        
+        for (let i = 0; i < positions.length; i++) {
+          const time = this.flightStartTime + (i / (positions.length - 1)) * flightDuration * 1000;
+          const waypoint = this.waypoints[i];
+          
+          let heading = 0;
+          let pitch = 0;
+          let roll = 0; // Banking angle
+          
+          // Calculate heading towards next waypoint
+          if (i < positions.length - 1) {
+            const currentPos = positions[i];
+            const nextPos = positions[i + 1];
+            
+            // Calculate bearing between points (geographic bearing)
+            const currentCart = Cesium.Cartographic.fromCartesian(currentPos);
+            const nextCart = Cesium.Cartographic.fromCartesian(nextPos);
+            
+            const deltaLon = nextCart.longitude - currentCart.longitude;
+            const lat1 = currentCart.latitude;
+            const lat2 = nextCart.latitude;
+            
+            const y = Math.sin(deltaLon) * Math.cos(lat2);
+            const x = Math.cos(lat1) * Math.sin(lat2) - Math.sin(lat1) * Math.cos(lat2) * Math.cos(deltaLon);
+            
+            // Geographic bearing (0 = north)
+            const geographicBearing = Math.atan2(y, x);
+            heading = geographicBearing;
+            
+            // Calculate pitch based on altitude change
+            const currentAlt = currentCart.height;
+            const nextAlt = nextCart.height;
+            const distance = Cesium.Cartesian3.distance(currentPos, nextPos);
+            const altitudeChange = nextAlt - currentAlt;
+            pitch = Math.atan2(altitudeChange, distance); // Climb/descent angle
+            
+            // Calculate banking for turns
+            if (i > 0 && i < positions.length - 1) {
+              const prevPos = positions[i - 1];
+              const prevCart = Cesium.Cartographic.fromCartesian(prevPos);
+              
+              // Calculate turn rate based on heading change
+              const prevBearing = Math.atan2(
+                Math.sin(currentCart.longitude - prevCart.longitude) * Math.cos(currentCart.latitude),
+                Math.cos(prevCart.latitude) * Math.sin(currentCart.latitude) - 
+                Math.sin(prevCart.latitude) * Math.cos(currentCart.latitude) * Math.cos(currentCart.longitude - prevCart.longitude)
+              );
+              
+              let headingChange = geographicBearing - prevBearing;
+              
+              // Normalize heading change to -π to π
+              while (headingChange > Math.PI) headingChange -= 2 * Math.PI;
+              while (headingChange < -Math.PI) headingChange += 2 * Math.PI;
+              
+              // Banking angle proportional to turn rate (max 30 degrees)
+              const maxBank = Cesium.Math.toRadians(30);
+              const turnSharpness = Math.abs(headingChange);
+              roll = Math.sign(headingChange) * Math.min(turnSharpness * 2, maxBank);
+            }
+          } else {
+            // Last waypoint - maintain previous heading, level flight
+            if (flightData.length > 0) {
+              heading = flightData[flightData.length - 1].heading;
+            } else {
+              heading = Cesium.Math.toRadians(this.heading);
+            }
+            pitch = 0;
+            roll = 0;
+          }
+          
+          flightData.push({
+            time: time,
+            position: positions[i],
+            heading: heading,
+            pitch: pitch,
+            roll: roll
+          });
+        }
+
+        // Create position property
+        const positionProperty = new Cesium.SampledPositionProperty();
+        for (let i = 0; i < flightData.length; i++) {
+          positionProperty.addSample(
+            Cesium.JulianDate.fromDate(new Date(flightData[i].time)), 
+            flightData[i].position
+          );
+        }
+        
+        positionProperty.setInterpolationOptions({
+          interpolationDegree: 2,
+          interpolationAlgorithm: Cesium.LagrangePolynomialApproximation
+        });
+
+        // Create dynamic orientation using CallbackProperty for realistic flight dynamics
+        const orientationProperty = new Cesium.CallbackProperty((time, result) => {
+          // Find appropriate flight data for current time
+          const currentTime = Cesium.JulianDate.toDate(time).getTime();
+          let flightPoint = flightData[0];
+          
+          // Linear interpolation between waypoints
+          for (let i = 1; i < flightData.length; i++) {
+            if (currentTime <= flightData[i].time) {
+              const t1 = flightData[i - 1].time;
+              const t2 = flightData[i].time;
+              const factor = (currentTime - t1) / (t2 - t1);
+              
+              // Interpolate orientation values
+              const h1 = flightData[i - 1].heading;
+              const h2 = flightData[i].heading;
+              const p1 = flightData[i - 1].pitch;
+              const p2 = flightData[i].pitch;
+              const r1 = flightData[i - 1].roll;
+              const r2 = flightData[i].roll;
+              
+              // Handle heading wraparound
+              let headingDiff = h2 - h1;
+              while (headingDiff > Math.PI) headingDiff -= 2 * Math.PI;
+              while (headingDiff < -Math.PI) headingDiff += 2 * Math.PI;
+              
+              flightPoint = {
+                heading: h1 + headingDiff * factor,
+                pitch: p1 + (p2 - p1) * factor,
+                roll: r1 + (r2 - r1) * factor,
+                position: flightData[i - 1].position
+              };
+              break;
+            }
+            flightPoint = flightData[i];
+          }
+          
+          // Convert from geographic to Cesium coordinate system
+          const cesiumHeading = flightPoint.heading - Math.PI / 2; // Subtract 90 degrees
+          
+          // Create quaternion from heading, pitch, roll
+          return Cesium.Transforms.headingPitchRollQuaternion(
+            flightPoint.position,
+            new Cesium.HeadingPitchRoll(cesiumHeading, flightPoint.pitch, flightPoint.roll),
+            Cesium.Ellipsoid.WGS84,
+            Cesium.Transforms.eastNorthUpToFixedFrame,
+            result
+          );
+        }, false);
+
+        // Apply to entity
+        this.entity.position = positionProperty;
+        this.entity.orientation = orientationProperty;
+        
+        // Update flight plan status
+        this.flightPlan = `Flying (${this.waypoints.length} waypoints)`;
+      }
+
+      stopFlight() {
+        this.isFlying = false;
+        this.flightProgress = 0;
+        this.flightStartTime = null;
+        
+        // Reset flight data
+        if (this.originalFuel !== undefined) {
+          this.fuel = `${this.originalFuel}%`;
+          this.originalFuel = undefined;
+        }
+        this.timeOnStation = '0m 0s';
+        this.status = 'Active';
+        this.speed = 0;
+        
+        // Reset to original position and orientation
+        const position = Cesium.Cartesian3.fromDegrees(
+          this.longitude,
+          this.latitude,
+          this.altitude
+        );
+        
+        // Convert from true north (0° = north) to Cesium system (0° = east)
+        const cesiumHeading = this.heading - 90;
+        const headingRadians = Cesium.Math.toRadians(cesiumHeading);
+        const pitchRadians = Cesium.Math.toRadians(this.pitch);
+        const rollRadians = Cesium.Math.toRadians(this.roll);
+        const hpr = new Cesium.HeadingPitchRoll(headingRadians, pitchRadians, rollRadians);
+        const orientation = Cesium.Transforms.headingPitchRollQuaternion(position, hpr);
+        
+        this.entity.position = position;
+        this.entity.orientation = orientation;
+        this.flightPlan = `Planned (${this.waypoints.length} waypoints)`;
+      }
+
+      calculateTotalDistance() {
+        let totalDistance = 0;
+        for (let i = 1; i < this.waypoints.length; i++) {
+          const prev = this.waypoints[i - 1];
+          const curr = this.waypoints[i];
+          
+          const distance = Cesium.Cartesian3.distance(
+            Cesium.Cartesian3.fromDegrees(prev.longitude, prev.latitude, prev.altitude),
+            Cesium.Cartesian3.fromDegrees(curr.longitude, curr.latitude, curr.altitude)
+          );
+          
+          totalDistance += distance;
+        }
+        return totalDistance / 1852; // Convert to nautical miles
+      }
+
+      clearFlightPlan() {
+        this.stopFlight();
+        this.waypoints = [];
+        if (this.flightPath) {
+          viewer.entities.remove(this.flightPath);
+          this.flightPath = null;
+        }
+        this.flightPlan = 'None';
+      }
+
+      remove() {
+        if (this.entity) {
+          viewer.entities.remove(this.entity);
+        }
+        if (this.flightPath) {
+          viewer.entities.remove(this.flightPath);
+        }
+      }
     }
 
-    const options = [
+    // Object card HTML generation
+    function createObjectCard(obj) {
+      return `
+        <div class="object-card" id="card_${obj.id}">
+          <h4>
+            ${obj.callsign} (${obj.type})
+            <span style="font-size: 12px; color: #aaa;">#${obj.id}</span>
+          </h4>
+          
+          <div class="object-info">
+            <div>
+              <label>Country:</label>
+              <input class="editable" value="${obj.country}" onchange="updateObjectField(${obj.id}, 'country', this.value)">
+            </div>
+            <div>
+              <label>Platform:</label>
+              <span>${obj.platform}</span>
+            </div>
+            <div>
+              <label>Longitude:</label>
+              <span>${obj.longitude.toFixed(6)}°</span>
+            </div>
+            <div>
+              <label>Latitude:</label>
+              <span>${obj.latitude.toFixed(6)}°</span>
+            </div>
+            <div>
+              <label>Speed:</label>
+              <span>${obj.speed.toFixed(0)} kts</span>
+            </div>
+            <div>
+              <label>Altitude:</label>
+              <span>${(obj.altitude * 3.28084).toFixed(0)} ft</span>
+            </div>
+            <div>
+              <label>Heading:</label>
+              <span>${obj.heading.toFixed(0)}°</span>
+            </div>
+            <div>
+              <label>Pitch:</label>
+              <span>${obj.pitch.toFixed(1)}°</span>
+            </div>
+            <div>
+              <label>Bank:</label>
+              <span>${obj.roll.toFixed(1)}°</span>
+            </div>
+            <div>
+              <label>Fuel:</label>
+              <input class="editable" value="${obj.fuel}" onchange="updateObjectField(${obj.id}, 'fuel', this.value)">
+            </div>
+            <div>
+              <label>Time on Station:</label>
+              <input class="editable" value="${obj.timeOnStation}" onchange="updateObjectField(${obj.id}, 'timeOnStation', this.value)">
+            </div>
+            <div>
+              <label>Status:</label>
+              <input class="editable" value="${obj.status}" onchange="updateObjectField(${obj.id}, 'status', this.value)">
+            </div>
+            <div>
+              <label>Mission:</label>
+              <input class="editable" value="${obj.mission}" onchange="updateObjectField(${obj.id}, 'mission', this.value)">
+            </div>
+            <div>
+              <label>Task:</label>
+              <input class="editable" value="${obj.task}" onchange="updateObjectField(${obj.id}, 'task', this.value)">
+            </div>
+            <div>
+              <label>Loadout:</label>
+              <input class="editable" value="${obj.loadout}" onchange="updateObjectField(${obj.id}, 'loadout', this.value)">
+            </div>
+            <div style="grid-column: span 2;">
+              <label>Flight Plan:</label>
+              <input class="editable" style="width: 150px;" value="${obj.flightPlan}" onchange="updateObjectField(${obj.id}, 'flightPlan', this.value)">
+            </div>
+          </div>
+
+          <div class="object-controls">
+            <button class="btn" onclick="focusObject(${obj.id})">Focus</button>
+            <button class="btn" onclick="trackObject(${obj.id})">Track</button>
+            <button class="btn" onclick="duplicateObject(${obj.id})">Duplicate</button>
+            <button class="btn danger" onclick="removeObject(${obj.id})">Remove</button>
+          </div>
+
+          <div style="margin-top: 10px; padding-top: 10px; border-top: 1px solid #555;">
+            <div style="color: #ff6b6b; font-size: 11px; margin-bottom: 8px;">🔧 DEBUG CONTROLS</div>
+            <div class="object-controls">
+              <button class="btn" style="background: #ff6b6b;" onclick="testBankAngle(${obj.id})">Bank 30°</button>
+              <button class="btn" style="background: #4ecdc4;" onclick="testAltitude(${obj.id})">Alt 30K ft</button>
+              <button class="btn" style="background: #45b7d1;" onclick="testReset(${obj.id})">Reset</button>
+            </div>
+          </div>
+
+          <div class="flight-planning">
+            <div class="flight-controls">
+              <button class="btn ${obj.isPlanning ? 'danger' : ''}" onclick="toggleFlightPlanning(${obj.id})">
+                ${obj.isPlanning ? 'Stop Planning' : 'Plan Flight'}
+              </button>
+              ${obj.waypoints.length >= 2 ? `
+                <button class="btn" onclick="${obj.isFlying ? 'stopFlight' : 'startFlight'}(${obj.id})">
+                  ${obj.isFlying ? 'Stop Flight' : 'Start Flight'}
+                </button>
+              ` : ''}
+              ${obj.waypoints.length > 0 ? `
+                <button class="btn-small danger" onclick="clearFlightPlan(${obj.id})">Clear</button>
+              ` : ''}
+              <span class="flight-status">${obj.isFlying ? 'FLYING' : obj.isPlanning ? 'PLANNING' : 'READY'}</span>
+            </div>
+            
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 8px 0;">
+              <div>
+                <label style="color: #aaa; font-size: 11px;">Flight Speed:</label>
+                <input class="editable" style="width: 60px;" value="${obj.flightSpeed}" onchange="updateFlightSpeed(${obj.id}, this.value)" placeholder="kts">
+              </div>
+              <div>
+                <label style="color: #aaa; font-size: 11px;">Heading:</label>
+                <input class="editable" style="width: 60px;" value="${obj.heading.toFixed(0)}" onchange="updateHeading(${obj.id}, this.value)" placeholder="deg">
+              </div>
+            </div>
+
+            ${obj.waypoints.length > 0 ? `
+              <div class="waypoint-list">
+                ${obj.waypoints.map((wp, index) => `
+                  <div class="waypoint-item">
+                    <div style="flex: 1;">
+                      <div style="color: #4a9eff; font-family: 'Courier New', monospace; font-size: 11px; margin-bottom: 2px;">
+                        WP${index + 1}: ${wp.longitude.toFixed(4)}°, ${wp.latitude.toFixed(4)}°
+                      </div>
+                      <div style="display: flex; align-items: center; gap: 4px;">
+                        <span style="color: #aaa; font-size: 10px;">Alt:</span>
+                        <input class="editable" style="width: 50px; font-size: 10px;" 
+                               value="${(wp.altitude * 3.28084).toFixed(0)}" 
+                               onchange="updateWaypointAltitude(${obj.id}, ${wp.id}, this.value)"
+                               placeholder="ft">
+                        <span style="color: #aaa; font-size: 10px;">ft</span>
+                      </div>
+                    </div>
+                    <div class="waypoint-controls">
+                      <button class="btn-small danger" onclick="removeWaypoint(${obj.id}, ${wp.id})">×</button>
+                    </div>
+                  </div>
+                `).join('')}
+              </div>
+            ` : ''}
+          </div>
+        </div>
+      `;
+    }
+
+    // Object management functions
+    function addObject(type, modelUrl, platform) {
+      // Prompt for initial heading
+      const headingInput = prompt(`Enter initial heading for ${type} (0-360 degrees):`, Math.floor(Math.random() * 360));
+      let initialHeading = null;
+      
+      if (headingInput !== null) {
+        const heading = parseFloat(headingInput);
+        if (!isNaN(heading)) {
+          initialHeading = ((heading % 360) + 360) % 360; // Normalize to 0-360
+        }
+      }
+      
+      const obj = new TrackedObject(type, modelUrl, platform, initialHeading);
+      objects.push(obj);
+      updateObjectCards();
+    }
+
+    function removeObject(id) {
+      const index = objects.findIndex(obj => obj.id === id);
+      if (index !== -1) {
+        objects[index].remove();
+        objects.splice(index, 1);
+        updateObjectCards();
+      }
+    }
+
+    function duplicateObject(id) {
+      const original = objects.find(obj => obj.id === id);
+      if (original) {
+        addObject(original.type, original.modelUrl, original.platform);
+      }
+    }
+
+    function focusObject(id) {
+      const obj = objects.find(obj => obj.id === id);
+      if (obj && obj.entity) {
+        viewer.camera.flyTo({
+          destination: Cesium.Cartesian3.fromDegrees(
+            obj.longitude,
+            obj.latitude,
+            obj.altitude + 5000
+          )
+        });
+      }
+    }
+
+    function trackObject(id) {
+      const obj = objects.find(obj => obj.id === id);
+      if (obj && obj.entity) {
+        viewer.trackedEntity = obj.entity;
+      }
+    }
+
+    function updateObjectField(id, field, value) {
+      const obj = objects.find(obj => obj.id === id);
+      if (obj) {
+        obj[field] = value;
+        if (field === 'callsign' && obj.entity) {
+          obj.entity.name = value;
+        }
+      }
+    }
+
+    function updateObjectCards() {
+      const container = document.getElementById('object-cards-container');
+      container.innerHTML = objects.map(obj => createObjectCard(obj)).join('');
+    }
+
+    // Real-time updates
+    function updateObjects() {
+      objects.forEach(obj => {
+        obj.updateCalculatedFields();
+      });
+      updateObjectCards();
+    }
+
+    // Update more frequently for real-time flight data
+    // Check if any aircraft are flying and adjust update rate accordingly
+    function getUpdateInterval() {
+      const anyFlying = objects.some(obj => obj.isFlying);
+      return anyFlying ? 200 : 1000; // 5 FPS when flying, 1 FPS when static
+    }
+
+    // Start with base interval
+    let updateIntervalId = setInterval(updateObjects, 1000);
+
+    // Dynamic update rate adjustment
+    function adjustUpdateRate() {
+      clearInterval(updateIntervalId);
+      updateIntervalId = setInterval(updateObjects, getUpdateInterval());
+    }
+
+    // Check and adjust update rate every 2 seconds
+    setInterval(adjustUpdateRate, 2000);
+
+    // Aircraft types configuration
+    const aircraftTypes = [
       {
-        text: "F-35",
-        onselect: function () {
-          createModel("assets/f-35b_lightning_ii.glb", 10000.0);
-        },
+        text: "F-35 Lightning II",
+        platform: "Fighter",
+        modelUrl: "assets/f-35b_lightning_ii.glb"
       },
       {
-        text: "J-20",
-        onselect: function () {
-          createModel("assets/chengdu_j-20_fighter_v2.glb", 10000.0);
-        },
+        text: "J-20 Mighty Dragon",
+        platform: "Fighter", 
+        modelUrl: "assets/chengdu_j-20_fighter_v2.glb"
       },
       {
-        text: "Instanced Box",
-        onselect: function () {
-          createModel("../SampleData/models/BoxInstanced/BoxInstanced.gltf", 15);
-        },
-      },
+        text: "Test Box",
+        platform: "Test",
+        modelUrl: "../SampleData/models/BoxInstanced/BoxInstanced.gltf"
+      }
     ];
 
-    // Populate dropdown and handle selection
+    // Setup dropdown
     const modelSelect = document.getElementById('modelSelect');
-    
-    options.forEach((option, index) => {
-      const optionElement = document.createElement('option');
-      optionElement.value = index;
-      optionElement.text = option.text;
-      modelSelect.appendChild(optionElement);
+    aircraftTypes.forEach((aircraft, index) => {
+      const option = document.createElement('option');
+      option.value = index;
+      option.text = aircraft.text;
+      modelSelect.appendChild(option);
     });
 
     modelSelect.addEventListener('change', function() {
       const selectedIndex = parseInt(this.value);
-      if (!isNaN(selectedIndex) && options[selectedIndex]) {
-        options[selectedIndex].onselect();
+      if (!isNaN(selectedIndex) && aircraftTypes[selectedIndex]) {
+        const aircraft = aircraftTypes[selectedIndex];
+        addObject(aircraft.text, aircraft.modelUrl, aircraft.platform);
+        this.value = ''; // Reset selection
       }
     });
+
+    // Flight planning global variables
+    let currentPlanningObject = null;
+
+    // Flight planning functions
+    function toggleFlightPlanning(id) {
+      const obj = objects.find(obj => obj.id === id);
+      if (!obj) return;
+
+      if (obj.isPlanning) {
+        // Stop planning mode
+        obj.isPlanning = false;
+        currentPlanningObject = null;
+        document.getElementById(`card_${id}`).classList.remove('planning-mode');
+      } else {
+        // Stop any other object's planning mode
+        objects.forEach(o => {
+          o.isPlanning = false;
+          document.getElementById(`card_${o.id}`)?.classList.remove('planning-mode');
+        });
+        
+        // Start planning mode
+        obj.isPlanning = true;
+        currentPlanningObject = obj;
+        document.getElementById(`card_${id}`).classList.add('planning-mode');
+      }
+      
+      updateObjectCards();
+    }
+
+    function startFlight(id) {
+      const obj = objects.find(obj => obj.id === id);
+      if (obj) {
+        obj.startFlight();
+        updateObjectCards();
+      }
+    }
+
+    function stopFlight(id) {
+      const obj = objects.find(obj => obj.id === id);
+      if (obj) {
+        obj.stopFlight();
+        updateObjectCards();
+      }
+    }
+
+    function clearFlightPlan(id) {
+      const obj = objects.find(obj => obj.id === id);
+      if (obj) {
+        obj.clearFlightPlan();
+        updateObjectCards();
+      }
+    }
+
+    function removeWaypoint(objectId, waypointId) {
+      const obj = objects.find(obj => obj.id === objectId);
+      if (obj) {
+        obj.removeWaypoint(waypointId);
+        updateObjectCards();
+      }
+    }
+
+    function updateFlightSpeed(id, newSpeed) {
+      const obj = objects.find(obj => obj.id === id);
+      if (obj) {
+        obj.flightSpeed = parseFloat(newSpeed) || 250;
+      }
+    }
+
+    function updateHeading(id, newHeading) {
+      const obj = objects.find(obj => obj.id === id);
+      if (obj) {
+        let heading = parseFloat(newHeading) || 0;
+        // Normalize heading to 0-360 degrees
+        heading = ((heading % 360) + 360) % 360;
+        obj.heading = heading;
+        
+        // Update entity orientation if not flying
+        if (!obj.isFlying && obj.entity) {
+          const position = Cesium.Cartesian3.fromDegrees(
+            obj.longitude,
+            obj.latitude,
+            obj.altitude
+          );
+          
+          // Convert from true north (0° = north) to Cesium system (0° = east)
+          const cesiumHeading = obj.heading - 90;
+          const headingRadians = Cesium.Math.toRadians(cesiumHeading);
+          const pitchRadians = Cesium.Math.toRadians(obj.pitch);
+          const rollRadians = Cesium.Math.toRadians(obj.roll);
+          const hpr = new Cesium.HeadingPitchRoll(headingRadians, pitchRadians, rollRadians);
+          const orientation = Cesium.Transforms.headingPitchRollQuaternion(position, hpr);
+          
+          obj.entity.orientation = orientation;
+        }
+      }
+    }
+
+    function updateWaypointAltitude(objectId, waypointId, newAltitudeFeet) {
+      const obj = objects.find(obj => obj.id === objectId);
+      if (obj) {
+        const waypoint = obj.waypoints.find(wp => wp.id === waypointId);
+        if (waypoint) {
+          // Convert feet to meters
+          waypoint.altitude = (parseFloat(newAltitudeFeet) || 10000) / 3.28084;
+          obj.updateFlightPath();
+        }
+      }
+    }
+
+    // DEBUG FUNCTIONS for testing orientation and position changes
+    function testBankAngle(id) {
+      const obj = objects.find(obj => obj.id === id);
+      if (obj && obj.entity) {
+        console.log('Testing bank angle for object', id);
+        
+        // Update object data
+        obj.roll = 30;
+        
+        // Get current position
+        const position = Cesium.Cartesian3.fromDegrees(
+          obj.longitude,
+          obj.latitude,
+          obj.altitude
+        );
+        
+        // Create new orientation with 30 degree bank
+        const cesiumHeading = obj.heading - 90; // Convert to Cesium coordinates
+        const headingRadians = Cesium.Math.toRadians(cesiumHeading);
+        const pitchRadians = Cesium.Math.toRadians(obj.pitch);
+        const rollRadians = Cesium.Math.toRadians(30); // 30 degree bank
+        
+        const hpr = new Cesium.HeadingPitchRoll(headingRadians, pitchRadians, rollRadians);
+        const orientation = Cesium.Transforms.headingPitchRollQuaternion(position, hpr);
+        
+        // Apply directly to entity
+        obj.entity.orientation = orientation;
+        
+        console.log('Applied 30° bank angle to entity');
+        updateObjectCards();
+      }
+    }
+
+    function testAltitude(id) {
+      const obj = objects.find(obj => obj.id === id);
+      if (obj && obj.entity) {
+        console.log('Testing altitude change for object', id);
+        
+        // Update object data
+        const newAltitudeFeet = 30000;
+        const newAltitudeMeters = newAltitudeFeet / 3.28084;
+        obj.altitude = newAltitudeMeters;
+        
+        // Create new position at 30,000 feet
+        const position = Cesium.Cartesian3.fromDegrees(
+          obj.longitude,
+          obj.latitude,
+          newAltitudeMeters
+        );
+        
+        // Apply directly to entity
+        obj.entity.position = position;
+        
+        console.log('Changed altitude to 30,000 feet');
+        updateObjectCards();
+      }
+    }
+
+    function testReset(id) {
+      const obj = objects.find(obj => obj.id === id);
+      if (obj && obj.entity) {
+        console.log('Resetting object to original state', id);
+        
+        // Reset object data
+        obj.roll = 0;
+        obj.pitch = 0;
+        
+        // Reset to original position and orientation
+        const position = Cesium.Cartesian3.fromDegrees(
+          obj.longitude,
+          obj.latitude,
+          obj.altitude
+        );
+        
+        const cesiumHeading = obj.heading - 90;
+        const headingRadians = Cesium.Math.toRadians(cesiumHeading);
+        const pitchRadians = Cesium.Math.toRadians(0);
+        const rollRadians = Cesium.Math.toRadians(0);
+        
+        const hpr = new Cesium.HeadingPitchRoll(headingRadians, pitchRadians, rollRadians);
+        const orientation = Cesium.Transforms.headingPitchRollQuaternion(position, hpr);
+        
+        obj.entity.position = position;
+        obj.entity.orientation = orientation;
+        
+        console.log('Reset object to original state');
+        updateObjectCards();
+      }
+    }
+
+    // Click handler for waypoint creation
+    viewer.cesiumWidget.canvas.addEventListener('click', function(e) {
+      if (!currentPlanningObject) return;
+
+      const pick = viewer.camera.getPickRay(new Cesium.Cartesian2(e.clientX, e.clientY));
+      const pickedPosition = viewer.scene.globe.pick(pick, viewer.scene);
+      
+      if (pickedPosition) {
+        const cartographic = Cesium.Cartographic.fromCartesian(pickedPosition);
+        const longitude = Cesium.Math.toDegrees(cartographic.longitude);
+        const latitude = Cesium.Math.toDegrees(cartographic.latitude);
+        const altitude = 10000; // Default altitude
+
+        currentPlanningObject.addWaypoint(longitude, latitude, altitude);
+        updateObjectCards();
+      }
+    }, false);
+
+    // Make functions global for onclick handlers
+    window.updateObjectField = updateObjectField;
+    window.focusObject = focusObject;
+    window.trackObject = trackObject;
+    window.duplicateObject = duplicateObject;
+    window.removeObject = removeObject;
+    window.toggleFlightPlanning = toggleFlightPlanning;
+    window.startFlight = startFlight;
+    window.stopFlight = stopFlight;
+    window.clearFlightPlan = clearFlightPlan;
+    window.removeWaypoint = removeWaypoint;
+    window.updateFlightSpeed = updateFlightSpeed;
+    window.updateHeading = updateHeading;
+    window.updateWaypointAltitude = updateWaypointAltitude;
+    window.testBankAngle = testBankAngle;
+    window.testAltitude = testAltitude;
+    window.testReset = testReset;
 
   </script>
 

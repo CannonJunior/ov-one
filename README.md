@@ -22,8 +22,23 @@ This will generate `sandcastle.html` with your access token embedded from `confi
 
 Due to CORS restrictions, you cannot open `sandcastle.html` directly in the browser. You need to serve it through a local web server.
 
-### Option 1: Python (if installed)
+### Quick Start (Recommended)
 ```bash
+./start.sh
+```
+This script will:
+- Stop any existing process on port 7999
+- Build the application with your token
+- Start a Python HTTP server on port 7999
+- Open http://localhost:7999/sandcastle.html
+
+### Manual Options
+
+#### Option 1: Python (if installed)
+```bash
+# Build first
+node build-sandcastle.js
+
 # Python 3
 python -m http.server 8000
 
@@ -31,8 +46,11 @@ python -m http.server 8000
 python -m SimpleHTTPServer 8000
 ```
 
-### Option 2: Node.js (if installed)
+#### Option 2: Node.js (if installed)
 ```bash
+# Build first
+node build-sandcastle.js
+
 # Install a simple server globally
 npm install -g http-server
 
@@ -40,10 +58,10 @@ npm install -g http-server
 http-server
 ```
 
-### Option 3: Live Server (VS Code extension)
+#### Option 3: Live Server (VS Code extension)
 If using VS Code, install the "Live Server" extension and right-click on `sandcastle.html` → "Open with Live Server"
 
-Then navigate to `http://localhost:8000/sandcastle.html` (or the port shown by your server) and use the dropdown menu to select different 3D models.
+Then navigate to the appropriate URL and use the dropdown menu to select different 3D models.
 
 ## Available Models
 
