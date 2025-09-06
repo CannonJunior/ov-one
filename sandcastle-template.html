@@ -271,6 +271,14 @@
     let objects = [];
     let nextObjectId = 1;
 
+    // Platform-specific turn rates (degrees per second)
+    const PLATFORM_TURN_RATES = {
+      'Fighter': 20,
+      'Bomber': 8,
+      'Transport': 5,
+      'UAV': 15
+    };
+
     // Object data structure
     class TrackedObject {
       constructor(type, modelUrl, platform, initialHeading = null) {
@@ -278,6 +286,7 @@
         this.type = type;
         this.modelUrl = modelUrl;
         this.platform = platform;
+        this.turnRate = PLATFORM_TURN_RATES[platform] || 10; // degrees per second
         
         // Calculated from Cesium entity
         this.longitude = -122.4175 + (Math.random() - 0.5) * 0.1;
@@ -583,36 +592,182 @@
           interpolationAlgorithm: Cesium.LagrangePolynomialApproximation
         });
 
-        // Create dynamic orientation using CallbackProperty for realistic flight dynamics
+        // Calculate lead-turn points for each waypoint using actual waypoint positions
+        const leadTurnData = [];
+        for (let i = 1; i < this.waypoints.length - 1; i++) {
+          const inboundWP = this.waypoints[i - 1];
+          const turnWP = this.waypoints[i];
+          const outboundWP = this.waypoints[i + 1];
+          
+          // Calculate actual course headings from waypoint positions
+          const inboundCart = Cesium.Cartographic.fromDegrees(inboundWP.longitude, inboundWP.latitude);
+          const turnCart = Cesium.Cartographic.fromDegrees(turnWP.longitude, turnWP.latitude);
+          const outboundCart = Cesium.Cartographic.fromDegrees(outboundWP.longitude, outboundWP.latitude);
+          
+          // Inbound course (approaching turnWP)
+          const inboundDeltaLon = turnCart.longitude - inboundCart.longitude;
+          const inboundY = Math.sin(inboundDeltaLon) * Math.cos(turnCart.latitude);
+          const inboundX = Math.cos(inboundCart.latitude) * Math.sin(turnCart.latitude) - 
+                          Math.sin(inboundCart.latitude) * Math.cos(turnCart.latitude) * Math.cos(inboundDeltaLon);
+          const inboundCourse = Math.atan2(inboundY, inboundX);
+          
+          // Outbound course (departing turnWP)
+          const outboundDeltaLon = outboundCart.longitude - turnCart.longitude;
+          const outboundY = Math.sin(outboundDeltaLon) * Math.cos(outboundCart.latitude);
+          const outboundX = Math.cos(turnCart.latitude) * Math.sin(outboundCart.latitude) - 
+                           Math.sin(turnCart.latitude) * Math.cos(outboundCart.latitude) * Math.cos(outboundDeltaLon);
+          const outboundCourse = Math.atan2(outboundY, outboundX);
+          
+          // Calculate heading change needed
+          let headingChange = outboundCourse - inboundCourse;
+          while (headingChange > Math.PI) headingChange -= 2 * Math.PI;
+          while (headingChange < -Math.PI) headingChange += 2 * Math.PI;
+          
+          if (Math.abs(headingChange) > 0.01) {
+            // Calculate turn duration based on platform turn rate
+            const turnDuration = Math.abs(Cesium.Math.toDegrees(headingChange)) / this.turnRate; // seconds
+            
+            // Calculate lead time needed to complete turn by waypoint
+            const leadTime = turnDuration * 0.5; // Start turn halfway before waypoint arrival
+            const turnWPTime = flightData[i].time;
+            const leadTurnStartTime = turnWPTime - (leadTime * 1000); // Convert to milliseconds
+            
+            leadTurnData.push({
+              waypointIndex: i,
+              leadTurnStartTime: leadTurnStartTime,
+              turnDuration: turnDuration * 1000, // Convert to milliseconds
+              headingChange: headingChange,
+              inboundCourse: inboundCourse,
+              outboundCourse: outboundCourse,
+              turnWaypoint: turnWP,
+              nextWaypoint: outboundWP
+            });
+          }
+        }
+
+        // Create dynamic orientation using CallbackProperty with lead-turning
         const orientationProperty = new Cesium.CallbackProperty((time, result) => {
-          // Find appropriate flight data for current time
           const currentTime = Cesium.JulianDate.toDate(time).getTime();
           let flightPoint = flightData[0];
           
-          // Linear interpolation between waypoints
+          // Find current position in flight plan
           for (let i = 1; i < flightData.length; i++) {
             if (currentTime <= flightData[i].time) {
               const t1 = flightData[i - 1].time;
               const t2 = flightData[i].time;
               const factor = (currentTime - t1) / (t2 - t1);
               
-              // Interpolate orientation values
               const h1 = flightData[i - 1].heading;
               const h2 = flightData[i].heading;
               const p1 = flightData[i - 1].pitch;
               const p2 = flightData[i].pitch;
-              const r1 = flightData[i - 1].roll;
-              const r2 = flightData[i].roll;
               
-              // Handle heading wraparound
-              let headingDiff = h2 - h1;
-              while (headingDiff > Math.PI) headingDiff -= 2 * Math.PI;
-              while (headingDiff < -Math.PI) headingDiff += 2 * Math.PI;
+              // Check if we're in a lead-turn
+              let inTurn = false;
+              let turnData = null;
+              
+              for (const turn of leadTurnData) {
+                if (currentTime >= turn.leadTurnStartTime && 
+                    currentTime <= turn.leadTurnStartTime + turn.turnDuration) {
+                  inTurn = true;
+                  turnData = turn;
+                  break;
+                }
+              }
+              
+              let dynamicHeading, dynamicRoll;
+              
+              if (inTurn && turnData) {
+                // We're in a lead-turn - turn to the outbound course
+                const targetHeading = turnData.outboundCourse;
+                const startHeading = turnData.inboundCourse;
+                const headingChange = turnData.headingChange;
+                
+                // Calculate turn progress
+                const turnProgress = (currentTime - turnData.leadTurnStartTime) / turnData.turnDuration;
+                const clampedProgress = Math.max(0, Math.min(1, turnProgress));
+                
+                // Linear progression toward outbound course (no overshoot)
+                dynamicHeading = startHeading + headingChange * clampedProgress;
+                
+                // Ensure we NEVER overshoot the outbound course
+                if (Math.abs(headingChange) > 0) {
+                  if (headingChange > 0) {
+                    // Right turn - don't exceed outbound course
+                    dynamicHeading = Math.min(dynamicHeading, targetHeading);
+                  } else {
+                    // Left turn - don't exceed outbound course
+                    dynamicHeading = Math.max(dynamicHeading, targetHeading);
+                  }
+                }
+                
+                // Normalize dynamic heading
+                while (dynamicHeading > Math.PI) dynamicHeading -= 2 * Math.PI;
+                while (dynamicHeading < -Math.PI) dynamicHeading += 2 * Math.PI;
+                
+                // Calculate how much of the turn we've completed
+                let actualHeadingChange = dynamicHeading - startHeading;
+                while (actualHeadingChange > Math.PI) actualHeadingChange -= 2 * Math.PI;
+                while (actualHeadingChange < -Math.PI) actualHeadingChange += 2 * Math.PI;
+                
+                const headingProgress = Math.abs(actualHeadingChange / headingChange);
+                const clampedHeadingProgress = Math.max(0, Math.min(1, headingProgress));
+                
+                // Banking synchronized with heading progress
+                let bankingFactor;
+                if (clampedHeadingProgress <= 0.5) {
+                  // First half of turn: build banking
+                  bankingFactor = Math.sin(clampedHeadingProgress * Math.PI); // 0 to 1
+                } else {
+                  // Second half of turn: decrease banking to zero
+                  bankingFactor = Math.sin((1 - clampedHeadingProgress) * Math.PI); // 1 to 0
+                }
+                
+                const turnIntensity = Math.abs(Cesium.Math.toDegrees(headingChange));
+                const maxBankAngle = Cesium.Math.toRadians(Math.min(turnIntensity, 60));
+                dynamicRoll = Math.sign(headingChange) * maxBankAngle * bankingFactor;
+                
+                // Stop turning when we reach the outbound course
+                const headingDifference = Math.abs(dynamicHeading - targetHeading);
+                if (headingDifference < 0.01) { // Within ~0.5 degrees
+                  dynamicRoll = 0;
+                  dynamicHeading = targetHeading;
+                }
+                
+              } else {
+                // Not in turn - fly straight on current leg's course
+                // Find which leg we're on and use its course
+                dynamicHeading = h1;
+                dynamicRoll = 0;
+                
+                // If we're between waypoints, use the direct course between them
+                for (let j = 0; j < this.waypoints.length - 1; j++) {
+                  const legStart = flightData[j];
+                  const legEnd = flightData[j + 1];
+                  
+                  if (currentTime >= legStart.time && currentTime <= legEnd.time) {
+                    // Calculate direct course for this leg
+                    const startWP = this.waypoints[j];
+                    const endWP = this.waypoints[j + 1];
+                    
+                    const startCart = Cesium.Cartographic.fromDegrees(startWP.longitude, startWP.latitude);
+                    const endCart = Cesium.Cartographic.fromDegrees(endWP.longitude, endWP.latitude);
+                    
+                    const deltaLon = endCart.longitude - startCart.longitude;
+                    const y = Math.sin(deltaLon) * Math.cos(endCart.latitude);
+                    const x = Math.cos(startCart.latitude) * Math.sin(endCart.latitude) - 
+                             Math.sin(startCart.latitude) * Math.cos(endCart.latitude) * Math.cos(deltaLon);
+                    
+                    dynamicHeading = Math.atan2(y, x);
+                    break;
+                  }
+                }
+              }
               
               flightPoint = {
-                heading: h1 + headingDiff * factor,
+                heading: dynamicHeading,
                 pitch: p1 + (p2 - p1) * factor,
-                roll: r1 + (r2 - r1) * factor,
+                roll: dynamicRoll,
                 position: flightData[i - 1].position
               };
               break;
