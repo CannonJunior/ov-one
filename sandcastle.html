@@ -382,22 +382,29 @@
         }
 
         const orientation = this.entity.orientation?.getValue(currentTime);
-        if (orientation) {
+        if (orientation && position) {
           try {
-            // Convert quaternion to heading/pitch/roll
-            const matrix = Cesium.Matrix3.fromQuaternion(orientation, new Cesium.Matrix3());
-            const hpr = Cesium.Transforms.fixedFrameToHeadingPitchRoll(
-              Cesium.Transforms.eastNorthUpToFixedFrame(position),
-              orientation
-            );
+            // Use the position-aware HPR conversion
+            const hpr = Cesium.HeadingPitchRoll.fromQuaternion(orientation, position);
             
-            // Convert from Cesium coordinates back to geographic coordinates  
-            const cesiumHeading = Cesium.Math.toDegrees(hpr.heading);
-            this.heading = ((cesiumHeading + 90) % 360 + 360) % 360; // Convert back to true north
-            this.pitch = Cesium.Math.toDegrees(hpr.pitch);
-            this.roll = Cesium.Math.toDegrees(hpr.roll);
+            // Convert from Cesium coordinate system to aviation coordinate system
+            // When creating: cesiumHeading = aviationHeading - 90
+            // When reading back: aviationHeading = cesiumHeading + 90
+            let heading = Cesium.Math.toDegrees(hpr.heading) + 90;
+            if (heading >= 360) heading -= 360;
+            if (heading < 0) heading += 360;
+            
+            // Pitch and roll should be correct as-is
+            const pitch = Cesium.Math.toDegrees(hpr.pitch);
+            const roll = Cesium.Math.toDegrees(hpr.roll);
+            
+            this.heading = heading;
+            this.pitch = pitch;
+            this.roll = roll;
+            
           } catch (e) {
-            // Fallback to stored values if calculation fails
+            // Keep existing values if calculation fails
+            console.error('Orientation calculation error:', e);
           }
         }
         
