@@ -391,7 +391,7 @@
               orientation
             );
             
-            // Convert from Cesium coordinates back to geographic coordinates
+            // Convert from Cesium coordinates back to geographic coordinates  
             const cesiumHeading = Cesium.Math.toDegrees(hpr.heading);
             this.heading = ((cesiumHeading + 90) % 360 + 360) % 360; // Convert back to true north
             this.pitch = Cesium.Math.toDegrees(hpr.pitch);
@@ -584,21 +584,7 @@
           });
         }
 
-        // Create position property
-        const positionProperty = new Cesium.SampledPositionProperty();
-        for (let i = 0; i < flightData.length; i++) {
-          positionProperty.addSample(
-            Cesium.JulianDate.fromDate(new Date(flightData[i].time)), 
-            flightData[i].position
-          );
-        }
-        
-        positionProperty.setInterpolationOptions({
-          interpolationDegree: 2,
-          interpolationAlgorithm: Cesium.LagrangePolynomialApproximation
-        });
-
-        // Calculate lead-turn points for each waypoint using actual waypoint positions
+        // Calculate lead-turn points for each waypoint using actual waypoint positions (MUST be before enhanced flight path)
         const leadTurnData = [];
         for (let i = 1; i < this.waypoints.length - 1; i++) {
           const inboundWP = this.waypoints[i - 1];
@@ -650,6 +636,103 @@
             });
           }
         }
+
+        // Create enhanced flight path with realistic turn geometry
+        const enhancedFlightData = [];
+        
+        for (let i = 0; i < flightData.length - 1; i++) {
+          const currentWP = flightData[i];
+          const nextWP = flightData[i + 1];
+          
+          enhancedFlightData.push(currentWP);
+          
+          // Add intermediate points for realistic turn geometry
+          const segmentTime = nextWP.time - currentWP.time;
+          const numIntermediate = Math.max(1, Math.floor(segmentTime / (5 * 1000))); // One point every 5 seconds
+          
+          for (let j = 1; j < numIntermediate; j++) {
+            const factor = j / numIntermediate;
+            const intermediateTime = currentWP.time + (segmentTime * factor);
+            
+            // Check if this time falls within any turn
+            let inTurn = false;
+            let turnData = null;
+            for (const turn of leadTurnData) {
+              if (intermediateTime >= turn.leadTurnStartTime && 
+                  intermediateTime <= turn.leadTurnStartTime + turn.turnDuration) {
+                inTurn = true;
+                turnData = turn;
+                break;
+              }
+            }
+            
+            let intermediatePosition;
+            if (inTurn && turnData) {
+              // Calculate curved path during turn
+              const turnProgress = (intermediateTime - turnData.leadTurnStartTime) / turnData.turnDuration;
+              const clampedProgress = Math.max(0, Math.min(1, turnProgress));
+              
+              // Create an arc instead of straight line
+              const centerFactor = 0.5; // Arc peak at midpoint
+              const arcHeight = Math.abs(turnData.headingChange) * 1000; // Arc height based on turn angle
+              const arcOffset = Math.sin(clampedProgress * Math.PI) * arcHeight;
+              
+              // Base position from linear interpolation
+              const basePosition = new Cesium.Cartesian3();
+              Cesium.Cartesian3.lerp(currentWP.position, nextWP.position, factor, basePosition);
+              
+              // Add perpendicular offset for turn arc
+              const currentCart = Cesium.Cartographic.fromCartesian(currentWP.position);
+              const nextCart = Cesium.Cartographic.fromCartesian(nextWP.position);
+              
+              // Calculate perpendicular direction (simplified for small distances)
+              const bearing = Math.atan2(
+                Math.sin(nextCart.longitude - currentCart.longitude) * Math.cos(nextCart.latitude),
+                Math.cos(currentCart.latitude) * Math.sin(nextCart.latitude) - 
+                Math.sin(currentCart.latitude) * Math.cos(nextCart.latitude) * Math.cos(nextCart.longitude - currentCart.longitude)
+              );
+              
+              const perpBearing = bearing + (Math.sign(turnData.headingChange) * Math.PI / 2);
+              const offsetLat = currentCart.latitude + (arcOffset * Math.cos(perpBearing)) / 111000;
+              const offsetLon = currentCart.longitude + (arcOffset * Math.sin(perpBearing)) / (111000 * Math.cos(currentCart.latitude));
+              
+              intermediatePosition = Cesium.Cartesian3.fromDegrees(
+                Cesium.Math.toDegrees(offsetLon),
+                Cesium.Math.toDegrees(offsetLat),
+                currentCart.height + (nextCart.height - currentCart.height) * factor
+              );
+            } else {
+              // Straight line interpolation when not turning
+              intermediatePosition = new Cesium.Cartesian3();
+              Cesium.Cartesian3.lerp(currentWP.position, nextWP.position, factor, intermediatePosition);
+            }
+            
+            enhancedFlightData.push({
+              time: intermediateTime,
+              position: intermediatePosition,
+              heading: currentWP.heading + (nextWP.heading - currentWP.heading) * factor,
+              pitch: currentWP.pitch + (nextWP.pitch - currentWP.pitch) * factor,
+              roll: 0 // Will be calculated by orientation property
+            });
+          }
+        }
+        
+        // Add final waypoint
+        enhancedFlightData.push(flightData[flightData.length - 1]);
+        
+        // Create position property with enhanced flight path
+        const positionProperty = new Cesium.SampledPositionProperty();
+        for (let i = 0; i < enhancedFlightData.length; i++) {
+          positionProperty.addSample(
+            Cesium.JulianDate.fromDate(new Date(enhancedFlightData[i].time)), 
+            enhancedFlightData[i].position
+          );
+        }
+        
+        positionProperty.setInterpolationOptions({
+          interpolationDegree: 1, // Linear interpolation for smoother curves
+          interpolationAlgorithm: Cesium.LinearApproximation
+        });
 
         // Create dynamic orientation using CallbackProperty with lead-turning
         const orientationProperty = new Cesium.CallbackProperty((time, result) => {
