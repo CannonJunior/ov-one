@@ -1,0 +1,1017 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3D Earth Visualization - Multi-Altitude Objects</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            font-family: 'Arial', sans-serif;
+            background: linear-gradient(135deg, #0f0f23 0%, #1a1a3a 100%);
+        }
+
+        #container {
+            position: relative;
+            width: 100vw;
+            height: 100vh;
+        }
+
+        .ui-panel {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            background: rgba(0, 0, 0, 0.8);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 12px;
+            padding: 20px;
+            color: white;
+            z-index: 100;
+            min-width: 280px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+        }
+
+        .altitude-controls {
+            margin-bottom: 20px;
+        }
+
+        .altitude-group {
+            margin-bottom: 15px;
+            padding: 10px;
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 8px;
+        }
+
+        .altitude-label {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 8px;
+            font-weight: bold;
+            font-size: 0.9em;
+        }
+
+        .altitude-range {
+            font-size: 0.75em;
+            color: #888;
+        }
+
+        button {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            border: none;
+            padding: 8px 16px;
+            border-radius: 6px;
+            color: white;
+            cursor: pointer;
+            font-size: 0.8em;
+            transition: all 0.3s ease;
+        }
+
+        button:hover {
+            background: linear-gradient(135deg, #764ba2 0%, #667eea 100%);
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.3);
+        }
+
+        button:active {
+            transform: translateY(0);
+        }
+
+        .info-display {
+            position: absolute;
+            bottom: 20px;
+            right: 20px;
+            background: rgba(0, 0, 0, 0.8);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 12px;
+            padding: 15px;
+            color: white;
+            font-size: 0.85em;
+            z-index: 100;
+        }
+
+        .legend {
+            position: absolute;
+            bottom: 20px;
+            left: 20px;
+            background: rgba(0, 0, 0, 0.8);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 12px;
+            padding: 15px;
+            color: white;
+            z-index: 100;
+        }
+
+        .legend-item {
+            display: flex;
+            align-items: center;
+            margin: 5px 0;
+            font-size: 0.8em;
+        }
+
+        .legend-color {
+            width: 16px;
+            height: 16px;
+            border-radius: 50%;
+            margin-right: 10px;
+        }
+
+        #loading {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: white;
+            font-size: 1.2em;
+            z-index: 200;
+        }
+    </style>
+</head>
+<body>
+    <div id="container">
+        <div id="loading">Loading 3D Earth...</div>
+        
+        <div class="ui-panel">
+            <h3 style="margin-top: 0; color: #667eea;">3D Earth - Multi-Altitude Objects</h3>
+            
+            <div class="camera-controls" style="margin-bottom: 20px; padding: 15px; background: rgba(255, 255, 255, 0.1); border-radius: 8px;">
+                <div style="font-weight: bold; margin-bottom: 10px; color: #4ecdc4;">Camera Controls</div>
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 10px;">
+                    <button onclick="resetCamera()">Reset View</button>
+                    <button onclick="toggleAutoRotate()" id="autoRotateBtn">Auto Rotate</button>
+                </div>
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 10px;">
+                    <button onclick="flyToLocation('north')">North Pole</button>
+                    <button onclick="flyToLocation('south')">South Pole</button>
+                </div>
+                <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; margin-bottom: 10px;">
+                    <button onclick="setView('top')">Top</button>
+                    <button onclick="setView('side')">Side</button>
+                    <button onclick="setView('angled')">Angled</button>
+                </div>
+                <div style="display: grid; grid-template-columns: 1fr; gap: 8px; margin-bottom: 10px;">
+                    <button onclick="flyToRandomLocation()">Random Location</button>
+                </div>
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
+                    <button onclick="toggleClouds()" id="cloudsBtn">Hide Clouds</button>
+                    <button onclick="toggleAtmosphere()" id="atmosphereBtn">Hide Atmosphere</button>
+                </div>
+            </div>
+            
+            <div class="altitude-controls">
+                <div class="altitude-group">
+                    <div class="altitude-label">
+                        Ground Vehicles
+                        <span class="altitude-range">0-50 km</span>
+                    </div>
+                    <button onclick="addObject('ground')">Add Vehicle</button>
+                </div>
+
+                <div class="altitude-group">
+                    <div class="altitude-label">
+                        Aircraft
+                        <span class="altitude-range">0.01-20 km</span>
+                    </div>
+                    <button onclick="addObject('aircraft')">Add Aircraft</button>
+                </div>
+
+                <div class="altitude-group">
+                    <div class="altitude-label">
+                        LEO Satellites
+                        <span class="altitude-range">160-2,000 km</span>
+                    </div>
+                    <button onclick="addObject('leo')">Add LEO Satellite</button>
+                </div>
+
+                <div class="altitude-group">
+                    <div class="altitude-label">
+                        MEO Satellites
+                        <span class="altitude-range">2,000-35,786 km</span>
+                    </div>
+                    <button onclick="addObject('meo')">Add MEO Satellite</button>
+                </div>
+
+                <div class="altitude-group">
+                    <div class="altitude-label">
+                        GEO Satellites
+                        <span class="altitude-range">~35,786 km</span>
+                    </div>
+                    <button onclick="addObject('geo')">Add GEO Satellite</button>
+                </div>
+            </div>
+
+            <button onclick="clearObjects()" style="width: 100%; background: linear-gradient(135deg, #ff6b6b 0%, #ee5a24 100%);">
+                Clear All Objects
+            </button>
+        </div>
+
+        <div class="info-display">
+            <div><strong>Camera Controls:</strong></div>
+            <div>• Left-click + drag: Rotate view</div>
+            <div>• Ctrl + Left-click + drag: Pitch/tilt</div>
+            <div>• Right-click + drag: Pan view</div>
+            <div>• Wheel: Zoom in/out</div>
+            <div>• Middle-click + drag: Pan view</div>
+            <div>• Double-click: Focus on point</div>
+            <div>• Keyboard: WASD for movement</div>
+            <div><strong>Objects:</strong> <span id="objectCount">0</span></div>
+            <div><strong>Camera Distance:</strong> <span id="cameraDistance">25</span></div>
+            <div style="margin-top: 10px; font-size: 0.7em; color: #888;">
+                <div><strong>Earth Imagery:</strong></div>
+                <div>NASA Blue Marble & Earth Observatory</div>
+            </div>
+        </div>
+
+        <div class="legend">
+            <div><strong>Object Types:</strong></div>
+            <div class="legend-item">
+                <div class="legend-color" style="background: #ff6b6b;"></div>
+                Ground Vehicles
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background: #4ecdc4;"></div>
+                Aircraft
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background: #45b7d1;"></div>
+                LEO Satellites
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background: #f9ca24;"></div>
+                MEO Satellites
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background: #6c5ce7;"></div>
+                GEO Satellites
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script>
+        console.log('Starting application...');
+        
+        // Global variables
+        var scene, camera, renderer;
+        var earth, atmosphere;
+        var objects = [];
+        var objectCount = 0;
+
+        // Earth radius
+        var EARTH_RADIUS = 6.371;
+        
+        // Altitude scales
+        var altitudeScales = {
+            ground: { min: 0, max: 0.1, color: 0xff6b6b },
+            aircraft: { min: 0.1, max: 0.5, color: 0x4ecdc4 },
+            leo: { min: 2, max: 8, color: 0x45b7d1 },           
+            meo: { min: 15, max: 25, color: 0xf9ca24 },         
+            geo: { min: 40, max: 50, color: 0x6c5ce7 }          
+        };
+
+        // Camera controls
+        var isMouseDown = false;
+        var mouseButton = -1;
+        var mouseX = 0, mouseY = 0;
+        var rotationX = 0, rotationY = 0;
+        var pitch = 0;
+        var distance = 25;
+        var cameraTarget = new THREE.Vector3(0, 0, 0);
+        var autoRotate = false;
+        var autoRotateSpeed = 0.005;
+        var keys = {};
+        var animationId = null;
+        var cameraTransition = null;
+        
+        // Cesium-style camera functions
+        var CameraController = {
+            flyTo: function(options) {
+                var destination = options.destination || new THREE.Vector3(0, 0, 25);
+                var duration = options.duration || 2000;
+                var heading = options.orientation ? options.orientation.heading : 0;
+                var pitch = options.orientation ? options.orientation.pitch : 0;
+                
+                this.animateToPosition({
+                    target: options.center || new THREE.Vector3(0, 0, 0),
+                    position: destination,
+                    heading: heading,
+                    pitch: pitch,
+                    duration: duration,
+                    complete: options.complete
+                });
+            },
+            
+            lookAtTransform: function(transform, offset) {
+                if (offset) {
+                    if (offset.heading !== undefined) {
+                        rotationY = offset.heading;
+                    }
+                    if (offset.pitch !== undefined) {
+                        rotationX = offset.pitch;
+                    }
+                    if (offset.range !== undefined) {
+                        distance = offset.range;
+                    }
+                }
+                cameraTarget.copy(transform);
+                updateCameraPosition();
+            },
+            
+            animateToPosition: function(options) {
+                if (cameraTransition) {
+                    clearInterval(cameraTransition);
+                }
+                
+                var startTime = Date.now();
+                var duration = options.duration || 1000;
+                
+                var startTarget = cameraTarget.clone();
+                var startDistance = distance;
+                var startRotationX = rotationX;
+                var startRotationY = rotationY;
+                var startPitch = pitch;
+                
+                var endTarget = options.target || new THREE.Vector3(0, 0, 0);
+                var endDistance = options.position ? options.position.length() : distance;
+                var endRotationX = options.pitch || rotationX;
+                var endRotationY = options.heading || rotationY;
+                var endPitch = options.roll || pitch;
+                
+                function animate() {
+                    var elapsed = Date.now() - startTime;
+                    var progress = Math.min(elapsed / duration, 1);
+                    
+                    // Cesium-style easing function
+                    var eased = CameraController.easingFunction(progress);
+                    
+                    cameraTarget.lerpVectors(startTarget, endTarget, eased);
+                    distance = startDistance + (endDistance - startDistance) * eased;
+                    rotationX = startRotationX + (endRotationX - startRotationX) * eased;
+                    rotationY = startRotationY + (endRotationY - startRotationY) * eased;
+                    pitch = startPitch + (endPitch - startPitch) * eased;
+                    
+                    updateCameraPosition();
+                    
+                    if (progress < 1) {
+                        cameraTransition = requestAnimationFrame(animate);
+                    } else {
+                        cameraTransition = null;
+                        if (options.complete) options.complete();
+                    }
+                }
+                
+                animate();
+            },
+            
+            easingFunction: function(t) {
+                // Cesium-style quadratic ease in-out
+                return t < 0.5 ? 2 * t * t : -1 + (4 - 2 * t) * t;
+            },
+            
+            setView: function(options) {
+                if (options.destination) {
+                    var cartesian = this.cartesianFromDegrees(
+                        options.destination.longitude,
+                        options.destination.latitude,
+                        options.destination.height || 0
+                    );
+                    
+                    this.flyTo({
+                        center: new THREE.Vector3(0, 0, 0),
+                        destination: cartesian,
+                        orientation: options.orientation,
+                        duration: options.duration
+                    });
+                }
+            },
+            
+            cartesianFromDegrees: function(longitude, latitude, height) {
+                var lon = longitude * Math.PI / 180;
+                var lat = latitude * Math.PI / 180;
+                var radius = EARTH_RADIUS + (height || 0) / 1000;
+                
+                var x = radius * Math.cos(lat) * Math.cos(lon);
+                var y = radius * Math.sin(lat);
+                var z = radius * Math.cos(lat) * Math.sin(lon);
+                
+                return new THREE.Vector3(x, y, z);
+            }
+        };
+
+        function init() {
+            console.log('Initializing 3D Earth...');
+
+            // Create scene
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x000011);
+
+            // Create camera
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 10000);
+            updateCameraPosition();
+
+            // Create renderer
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            document.getElementById('container').appendChild(renderer.domElement);
+
+            // Create Earth
+            createEarth();
+
+            // Add lighting
+            addLighting();
+
+            // Add stars
+            addStars();
+
+            // Setup mouse controls
+            setupMouseControls();
+            
+            // Setup keyboard controls
+            setupKeyboardControls();
+
+            // Hide loading
+            document.getElementById('loading').style.display = 'none';
+
+            // Start rendering
+            render();
+
+            console.log('Initialization complete');
+        }
+
+        function updateCameraPosition() {
+            var x = Math.cos(rotationY) * Math.cos(rotationX) * distance;
+            var y = Math.sin(rotationX) * distance;
+            var z = Math.sin(rotationY) * Math.cos(rotationX) * distance;
+            
+            camera.position.set(
+                cameraTarget.x + x,
+                cameraTarget.y + y,
+                cameraTarget.z + z
+            );
+            camera.lookAt(cameraTarget);
+            
+            // Apply pitch tilt by rotating the camera's up vector
+            var pitchRotation = new THREE.Matrix4().makeRotationX(pitch);
+            camera.up.set(0, 1, 0);
+            camera.up.applyMatrix4(pitchRotation);
+            camera.lookAt(cameraTarget);
+            
+            // Update distance display
+            document.getElementById('cameraDistance').textContent = Math.round(distance * 10) / 10;
+        }
+
+        function createEarth() {
+            console.log('Creating realistic Earth with textures...');
+            
+            // Create Earth geometry with higher detail for texture mapping
+            var earthGeometry = new THREE.SphereGeometry(EARTH_RADIUS, 64, 64);
+            
+            // Load Earth textures
+            var textureLoader = new THREE.TextureLoader();
+            
+            // NASA Blue Marble texture (using a publicly available version)
+            var earthTexture = textureLoader.load(
+                'https://eoimages.gsfc.nasa.gov/images/imagerecords/73000/73909/world.topo.bathy.200412.3x5400x2700.jpg',
+                function(texture) {
+                    console.log('Earth day texture loaded successfully');
+                },
+                undefined,
+                function(error) {
+                    console.warn('Failed to load Earth day texture, using fallback color');
+                }
+            );
+            
+            // Earth bump map for terrain relief
+            var bumpTexture = textureLoader.load(
+                'https://eoimages.gsfc.nasa.gov/images/imagerecords/73000/73934/world.topo.bathy.200401.3x5400x2700.jpg',
+                function(texture) {
+                    console.log('Earth bump texture loaded successfully');
+                },
+                undefined,
+                function(error) {
+                    console.warn('Failed to load Earth bump texture');
+                }
+            );
+            
+            // Night lights texture
+            var nightTexture = textureLoader.load(
+                'https://eoimages.gsfc.nasa.gov/images/imagerecords/55000/55167/earth_lights_lrg.jpg',
+                function(texture) {
+                    console.log('Earth night lights texture loaded successfully');
+                },
+                undefined,
+                function(error) {
+                    console.warn('Failed to load night lights texture');
+                }
+            );
+            
+            // Cloud texture
+            var cloudsTexture = textureLoader.load(
+                'https://eoimages.gsfc.nasa.gov/images/imagerecords/57000/57747/cloud_combined_2048.jpg',
+                function(texture) {
+                    console.log('Clouds texture loaded successfully');
+                },
+                undefined,
+                function(error) {
+                    console.warn('Failed to load clouds texture');
+                }
+            );
+            
+            // Configure texture settings for better quality
+            [earthTexture, bumpTexture, nightTexture, cloudsTexture].forEach(function(texture) {
+                if (texture) {
+                    texture.wrapS = THREE.RepeatWrapping;
+                    texture.wrapT = THREE.RepeatWrapping;
+                    texture.minFilter = THREE.LinearFilter;
+                    texture.magFilter = THREE.LinearFilter;
+                }
+            });
+            
+            // Create realistic Earth material using MeshStandardMaterial
+            var earthMaterial = new THREE.MeshStandardMaterial({
+                map: earthTexture,
+                bumpMap: bumpTexture,
+                bumpScale: 0.05,
+                roughness: 0.8,
+                metalness: 0.1,
+                transparent: false
+            });
+            
+            // Fallback material if textures fail to load
+            var fallbackMaterial = new THREE.MeshStandardMaterial({
+                color: 0x4477aa,
+                roughness: 0.8,
+                metalness: 0.1
+            });
+            
+            // Create Earth mesh
+            earth = new THREE.Mesh(earthGeometry, earthMaterial);
+            scene.add(earth);
+            
+            // Add atmosphere glow effect
+            createAtmosphere();
+            
+            // Add cloud layer
+            createClouds(cloudsTexture);
+            
+            console.log('Earth creation completed');
+        }
+        
+        function createAtmosphere() {
+            // Create atmosphere glow using a slightly larger sphere
+            var atmosphereGeometry = new THREE.SphereGeometry(EARTH_RADIUS * 1.03, 32, 32);
+            var atmosphereMaterial = new THREE.MeshBasicMaterial({
+                color: 0x4a90e2,
+                transparent: true,
+                opacity: 0.1,
+                side: THREE.BackSide
+            });
+            
+            atmosphere = new THREE.Mesh(atmosphereGeometry, atmosphereMaterial);
+            scene.add(atmosphere);
+        }
+        
+        function createClouds(cloudsTexture) {
+            if (!cloudsTexture) return;
+            
+            // Create cloud layer slightly above Earth surface
+            var cloudsGeometry = new THREE.SphereGeometry(EARTH_RADIUS * 1.005, 32, 32);
+            var cloudsMaterial = new THREE.MeshStandardMaterial({
+                alphaMap: cloudsTexture,
+                transparent: true,
+                opacity: 0.4,
+                depthWrite: false
+            });
+            
+            var clouds = new THREE.Mesh(cloudsGeometry, cloudsMaterial);
+            clouds.name = 'clouds';
+            scene.add(clouds);
+            
+            // Animate clouds rotation
+            function animateClouds() {
+                if (clouds) {
+                    clouds.rotation.y += 0.001; // Slower than Earth rotation
+                }
+                requestAnimationFrame(animateClouds);
+            }
+            animateClouds();
+        }
+
+        function addLighting() {
+            // Ambient light for overall illumination (space has some reflected light)
+            var ambientLight = new THREE.AmbientLight(0x404040, 0.3);
+            scene.add(ambientLight);
+
+            // Directional light representing the Sun
+            var sunLight = new THREE.DirectionalLight(0xffffff, 1.2);
+            sunLight.position.set(100, 50, 50);
+            sunLight.castShadow = false; // Disable shadows for performance
+            scene.add(sunLight);
+            
+            // Add a subtle rim light for atmosphere effect
+            var rimLight = new THREE.DirectionalLight(0x4a90e2, 0.3);
+            rimLight.position.set(-100, 20, -50);
+            scene.add(rimLight);
+        }
+
+        function addStars() {
+            var starsGeometry = new THREE.BufferGeometry();
+            var starsCount = 1000;
+            var positions = new Float32Array(starsCount * 3);
+
+            for (var i = 0; i < starsCount * 3; i++) {
+                positions[i] = (Math.random() - 0.5) * 2000;
+            }
+
+            starsGeometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+            var starsMaterial = new THREE.PointsMaterial({ color: 0xffffff, size: 2 });
+            var stars = new THREE.Points(starsGeometry, starsMaterial);
+            scene.add(stars);
+        }
+
+        function setupMouseControls() {
+            var canvas = renderer.domElement;
+
+            canvas.addEventListener('mousedown', function(event) {
+                isMouseDown = true;
+                mouseButton = event.button;
+                mouseX = event.clientX;
+                mouseY = event.clientY;
+                event.preventDefault();
+            });
+
+            canvas.addEventListener('mousemove', function(event) {
+                if (isMouseDown) {
+                    var deltaX = event.clientX - mouseX;
+                    var deltaY = event.clientY - mouseY;
+
+                    if (mouseButton === 0) {
+                        if (event.ctrlKey) {
+                            // Ctrl + Left button: Pitch camera (look up/down)
+                            var pitchDelta = deltaY * 0.01;
+                            rotationX -= pitchDelta;
+                            rotationX = Math.max(-Math.PI / 2 + 0.1, Math.min(Math.PI / 2 - 0.1, rotationX));
+                        } else {
+                            // Left button: Rotate around Earth (orbital movement)
+                            rotationY += deltaX * 0.01;
+                            rotationX += deltaY * 0.01;
+                            rotationX = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, rotationX));
+                        }
+                    } else if (mouseButton === 1) {
+                        // Middle button: Pan the camera target
+                        var panSpeed = 0.1;
+                        var forward = new THREE.Vector3();
+                        var right = new THREE.Vector3();
+                        var up = new THREE.Vector3(0, 1, 0);
+                        
+                        camera.getWorldDirection(forward);
+                        right.crossVectors(forward, up).normalize();
+                        up.crossVectors(right, forward).normalize();
+                        
+                        var panVector = new THREE.Vector3();
+                        panVector.add(right.clone().multiplyScalar(-deltaX * panSpeed));
+                        panVector.add(up.clone().multiplyScalar(deltaY * panSpeed));
+                        
+                        cameraTarget.add(panVector);
+                    } else if (mouseButton === 2) {
+                        // Right button: Pan view (alternative method)
+                        var panSpeed = 0.1;
+                        var forward = new THREE.Vector3();
+                        var right = new THREE.Vector3();
+                        var up = new THREE.Vector3(0, 1, 0);
+                        
+                        camera.getWorldDirection(forward);
+                        right.crossVectors(forward, up).normalize();
+                        up.crossVectors(right, forward).normalize();
+                        
+                        var panVector = new THREE.Vector3();
+                        panVector.add(right.clone().multiplyScalar(-deltaX * panSpeed));
+                        panVector.add(up.clone().multiplyScalar(deltaY * panSpeed));
+                        
+                        cameraTarget.add(panVector);
+                    }
+
+                    updateCameraPosition();
+
+                    mouseX = event.clientX;
+                    mouseY = event.clientY;
+                }
+            });
+
+            canvas.addEventListener('mouseup', function() {
+                isMouseDown = false;
+                mouseButton = -1;
+            });
+
+            canvas.addEventListener('dblclick', function(event) {
+                // Double-click to focus on a point
+                var mouse = new THREE.Vector2();
+                mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+                mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+                
+                var raycaster = new THREE.Raycaster();
+                raycaster.setFromCamera(mouse, camera);
+                
+                var intersects = raycaster.intersectObject(earth);
+                if (intersects.length > 0) {
+                    var point = intersects[0].point;
+                    animateCameraToTarget(point, distance * 0.8);
+                }
+            });
+
+            canvas.addEventListener('wheel', function(event) {
+                distance += event.deltaY * 0.05;
+                // Allow zooming much closer to Earth's surface (minimum 0.5 units above surface)
+                distance = Math.max(EARTH_RADIUS + 0.5, Math.min(500, distance));
+                updateCameraPosition();
+                event.preventDefault();
+            });
+
+            // Prevent context menu on right-click
+            canvas.addEventListener('contextmenu', function(event) {
+                event.preventDefault();
+            });
+
+            document.addEventListener('mouseup', function() {
+                isMouseDown = false;
+                mouseButton = -1;
+            });
+        }
+
+        function addObject(type) {
+            console.log('Adding object:', type);
+            
+            var scale = altitudeScales[type];
+            if (!scale) return;
+
+            var altitude = scale.min + Math.random() * (scale.max - scale.min);
+            var dist = EARTH_RADIUS + altitude;
+
+            var phi = Math.random() * Math.PI * 2;
+            var theta = Math.random() * Math.PI;
+
+            var x = dist * Math.sin(theta) * Math.cos(phi);
+            var y = dist * Math.sin(theta) * Math.sin(phi);
+            var z = dist * Math.cos(theta);
+
+            var geometry = new THREE.BoxGeometry(0.3, 0.3, 0.3);
+            var material = new THREE.MeshBasicMaterial({ color: scale.color });
+            var object = new THREE.Mesh(geometry, material);
+            object.position.set(x, y, z);
+
+            scene.add(object);
+            objects.push(object);
+            objectCount++;
+            updateObjectCount();
+            
+            console.log('Object added successfully');
+            
+            // Pan camera to look at the object
+            var targetRotY = Math.atan2(x, z);
+            var horizontalDistance = Math.sqrt(x * x + z * z);
+            var targetRotX = Math.atan2(y, horizontalDistance);
+            
+            rotationX = targetRotX;
+            rotationY = targetRotY;
+            pitch = 0;
+            
+            updateCameraPosition();
+            
+            console.log('Camera panned to object');
+        }
+
+        function clearObjects() {
+            for (var i = 0; i < objects.length; i++) {
+                scene.remove(objects[i]);
+            }
+            objects = [];
+            objectCount = 0;
+            updateObjectCount();
+        }
+
+        function updateObjectCount() {
+            document.getElementById('objectCount').textContent = objectCount;
+        }
+
+        function setupKeyboardControls() {
+            document.addEventListener('keydown', function(event) {
+                keys[event.code] = true;
+            });
+            
+            document.addEventListener('keyup', function(event) {
+                keys[event.code] = false;
+            });
+        }
+        
+        function handleKeyboardInput() {
+            var moveSpeed = 0.5;
+            var rotateSpeed = 0.02;
+            
+            if (keys['KeyW']) {
+                distance = Math.max(EARTH_RADIUS + 0.5, distance - moveSpeed);
+            }
+            if (keys['KeyS']) {
+                distance = Math.min(500, distance + moveSpeed);
+            }
+            if (keys['KeyA']) {
+                rotationY -= rotateSpeed;
+            }
+            if (keys['KeyD']) {
+                rotationY += rotateSpeed;
+            }
+            if (keys['KeyQ']) {
+                rotationX = Math.max(-Math.PI / 2, rotationX - rotateSpeed);
+            }
+            if (keys['KeyE']) {
+                rotationX = Math.min(Math.PI / 2, rotationX + rotateSpeed);
+            }
+            
+            updateCameraPosition();
+        }
+        
+        function animateCameraToTarget(target, newDistance) {
+            var startTarget = cameraTarget.clone();
+            var startDistance = distance;
+            var startRotationX = rotationX;
+            var startRotationY = rotationY;
+            
+            var endTarget = target;
+            var endDistance = newDistance || distance;
+            
+            // Calculate target rotation based on new target position
+            var direction = target.clone().normalize();
+            var endRotationY = Math.atan2(direction.x, direction.z);
+            var horizontalDistance = Math.sqrt(direction.x * direction.x + direction.z * direction.z);
+            var endRotationX = Math.atan2(direction.y, horizontalDistance);
+            
+            var duration = 1000; // 1 second
+            var startTime = Date.now();
+            
+            function animate() {
+                var elapsed = Date.now() - startTime;
+                var progress = Math.min(elapsed / duration, 1);
+                
+                // Smooth easing
+                var eased = 0.5 * (1 - Math.cos(progress * Math.PI));
+                
+                cameraTarget.lerpVectors(startTarget, endTarget, eased);
+                distance = startDistance + (endDistance - startDistance) * eased;
+                rotationX = startRotationX + (endRotationX - startRotationX) * eased;
+                rotationY = startRotationY + (endRotationY - startRotationY) * eased;
+                
+                updateCameraPosition();
+                
+                if (progress < 1) {
+                    requestAnimationFrame(animate);
+                }
+            }
+            
+            animate();
+        }
+        
+        function resetCamera() {
+            CameraController.flyTo({
+                center: new THREE.Vector3(0, 0, 0),
+                destination: new THREE.Vector3(0, 0, 25),
+                orientation: {
+                    heading: 0,
+                    pitch: -0.3,
+                    roll: 0
+                },
+                duration: 1500
+            });
+        }
+        
+        function toggleAutoRotate() {
+            autoRotate = !autoRotate;
+            var btn = document.getElementById('autoRotateBtn');
+            btn.textContent = autoRotate ? 'Stop Rotate' : 'Auto Rotate';
+        }
+        
+        function flyToLocation(location) {
+            var locations = {
+                'north': {
+                    longitude: 0,
+                    latitude: 89,
+                    height: 15000
+                },
+                'south': {
+                    longitude: 0,
+                    latitude: -89,
+                    height: 15000
+                }
+            };
+            
+            if (locations[location]) {
+                CameraController.setView({
+                    destination: locations[location],
+                    orientation: {
+                        heading: 0,
+                        pitch: -Math.PI / 4,
+                        roll: 0
+                    },
+                    duration: 2000
+                });
+            }
+        }
+        
+        function setView(view) {
+            var views = {
+                'top': {
+                    destination: { longitude: 0, latitude: 0, height: 25000 },
+                    orientation: { heading: 0, pitch: -Math.PI / 2, roll: 0 }
+                },
+                'side': {
+                    destination: { longitude: 90, latitude: 0, height: 25000 },
+                    orientation: { heading: 0, pitch: 0, roll: 0 }
+                },
+                'angled': {
+                    destination: { longitude: 45, latitude: 30, height: 25000 },
+                    orientation: { heading: 0, pitch: -0.3, roll: 0 }
+                }
+            };
+            
+            if (views[view]) {
+                CameraController.setView({
+                    destination: views[view].destination,
+                    orientation: views[view].orientation,
+                    duration: 1500
+                });
+            }
+        }
+        
+        function flyToRandomLocation() {
+            var randomLon = (Math.random() - 0.5) * 360;
+            var randomLat = (Math.random() - 0.5) * 180;
+            var randomHeight = 10000 + Math.random() * 20000;
+            
+            CameraController.setView({
+                destination: {
+                    longitude: randomLon,
+                    latitude: randomLat,
+                    height: randomHeight
+                },
+                orientation: {
+                    heading: Math.random() * Math.PI * 2,
+                    pitch: -Math.PI / 6 - Math.random() * Math.PI / 3,
+                    roll: 0
+                },
+                duration: 2500
+            });
+        }
+        
+        function toggleClouds() {
+            var clouds = scene.getObjectByName('clouds');
+            if (clouds) {
+                clouds.visible = !clouds.visible;
+                var btn = document.getElementById('cloudsBtn');
+                btn.textContent = clouds.visible ? 'Hide Clouds' : 'Show Clouds';
+            }
+        }
+        
+        function toggleAtmosphere() {
+            if (atmosphere) {
+                atmosphere.visible = !atmosphere.visible;
+                var btn = document.getElementById('atmosphereBtn');
+                btn.textContent = atmosphere.visible ? 'Hide Atmosphere' : 'Show Atmosphere';
+            }
+        }
+
+        function render() {
+            requestAnimationFrame(render);
+            
+            handleKeyboardInput();
+            
+            // Auto-rotate if enabled
+            if (autoRotate) {
+                rotationY += autoRotateSpeed;
+                updateCameraPosition();
+            }
+
+            // Rotate Earth
+            if (earth) {
+                earth.rotation.y += 0.002;
+            }
+
+            renderer.render(scene, camera);
+        }
+
+        // Window resize
+        window.addEventListener('resize', function() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+        // Start when page loads
+        window.addEventListener('load', function() {
+            init();
+        });
+    </script>
+</body>
+</html>
