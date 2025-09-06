@@ -442,14 +442,20 @@
           longitude: longitude,
           latitude: latitude,
           altitude: altitude || 10000,
+          speed: this.flightSpeed || 250, // Default speed in knots
+          heading: undefined, // Auto-calculate heading
           id: Date.now()
         });
         this.updateFlightPath();
+        // Force card regeneration when waypoints change
+        setTimeout(() => updateObjectCards(), 100);
       }
 
       removeWaypoint(waypointId) {
         this.waypoints = this.waypoints.filter(wp => wp.id !== waypointId);
         this.updateFlightPath();
+        // Force card regeneration when waypoints change
+        setTimeout(() => updateObjectCards(), 100);
       }
 
       updateFlightPath() {
@@ -489,88 +495,88 @@
           this.originalFuel = parseFloat(this.fuel.replace('%', '')) || 75;
         }
 
-        // Create flight animation
-        const totalDistance = this.calculateTotalDistance();
-        const flightDuration = (totalDistance / this.flightSpeed) * 3600; // seconds
-
+        // Create flight animation with per-waypoint speeds
         const positions = this.waypoints.map(wp => 
           Cesium.Cartesian3.fromDegrees(wp.longitude, wp.latitude, wp.altitude)
         );
 
-        // Create smooth spline path with realistic flight dynamics
+        // Calculate time for each leg based on waypoint speeds
         const flightData = [];
+        let cumulativeTime = this.flightStartTime;
         
-        for (let i = 0; i < positions.length; i++) {
-          const time = this.flightStartTime + (i / (positions.length - 1)) * flightDuration * 1000;
+        for (let i = 0; i < this.waypoints.length; i++) {
           const waypoint = this.waypoints[i];
           
+          if (i > 0) {
+            // Calculate distance to this waypoint from previous
+            const prevPos = positions[i - 1];
+            const currentPos = positions[i];
+            const segmentDistance = Cesium.Cartesian3.distance(prevPos, currentPos) / 1000; // km
+            
+            // Use waypoint's speed (or default speed) to calculate time
+            const waypointSpeed = waypoint.speed || this.flightSpeed || 250; // knots
+            const speedKmh = waypointSpeed * 1.852; // Convert knots to km/h
+            const segmentTimeHours = segmentDistance / speedKmh;
+            const segmentTimeMs = segmentTimeHours * 3600 * 1000; // Convert to milliseconds
+            
+            cumulativeTime += segmentTimeMs;
+          }
+          
+          // Use waypoint heading if specified, otherwise calculate
           let heading = 0;
           let pitch = 0;
           let roll = 0; // Banking angle
           
-          // Calculate heading towards next waypoint
-          if (i < positions.length - 1) {
+          if (waypoint.heading !== undefined) {
+            // Use specified heading
+            heading = Cesium.Math.toRadians(waypoint.heading);
+          } else {
+            // Calculate heading towards next waypoint
+            if (i < this.waypoints.length - 1) {
+              const currentPos = positions[i];
+              const nextPos = positions[i + 1];
+              
+              // Calculate bearing between points (geographic bearing)
+              const currentCart = Cesium.Cartographic.fromCartesian(currentPos);
+              const nextCart = Cesium.Cartographic.fromCartesian(nextPos);
+              
+              const deltaLon = nextCart.longitude - currentCart.longitude;
+              const lat1 = currentCart.latitude;
+              const lat2 = nextCart.latitude;
+              
+              const y = Math.sin(deltaLon) * Math.cos(lat2);
+              const x = Math.cos(lat1) * Math.sin(lat2) - Math.sin(lat1) * Math.cos(lat2) * Math.cos(deltaLon);
+              
+              // Geographic bearing (0 = north)
+              heading = Math.atan2(y, x);
+            } else {
+              // Last waypoint - maintain previous heading
+              if (flightData.length > 0) {
+                heading = flightData[flightData.length - 1].heading;
+              } else {
+                heading = Cesium.Math.toRadians(this.heading);
+              }
+            }
+          }
+          
+          // Calculate pitch based on altitude change
+          if (i < this.waypoints.length - 1) {
             const currentPos = positions[i];
             const nextPos = positions[i + 1];
-            
-            // Calculate bearing between points (geographic bearing)
             const currentCart = Cesium.Cartographic.fromCartesian(currentPos);
             const nextCart = Cesium.Cartographic.fromCartesian(nextPos);
             
-            const deltaLon = nextCart.longitude - currentCart.longitude;
-            const lat1 = currentCart.latitude;
-            const lat2 = nextCart.latitude;
-            
-            const y = Math.sin(deltaLon) * Math.cos(lat2);
-            const x = Math.cos(lat1) * Math.sin(lat2) - Math.sin(lat1) * Math.cos(lat2) * Math.cos(deltaLon);
-            
-            // Geographic bearing (0 = north)
-            const geographicBearing = Math.atan2(y, x);
-            heading = geographicBearing;
-            
-            // Calculate pitch based on altitude change
             const currentAlt = currentCart.height;
             const nextAlt = nextCart.height;
             const distance = Cesium.Cartesian3.distance(currentPos, nextPos);
             const altitudeChange = nextAlt - currentAlt;
-            pitch = Math.atan2(altitudeChange, distance); // Climb/descent angle
-            
-            // Calculate banking for turns
-            if (i > 0 && i < positions.length - 1) {
-              const prevPos = positions[i - 1];
-              const prevCart = Cesium.Cartographic.fromCartesian(prevPos);
-              
-              // Calculate turn rate based on heading change
-              const prevBearing = Math.atan2(
-                Math.sin(currentCart.longitude - prevCart.longitude) * Math.cos(currentCart.latitude),
-                Math.cos(prevCart.latitude) * Math.sin(currentCart.latitude) - 
-                Math.sin(prevCart.latitude) * Math.cos(currentCart.latitude) * Math.cos(currentCart.longitude - prevCart.longitude)
-              );
-              
-              let headingChange = geographicBearing - prevBearing;
-              
-              // Normalize heading change to -π to π
-              while (headingChange > Math.PI) headingChange -= 2 * Math.PI;
-              while (headingChange < -Math.PI) headingChange += 2 * Math.PI;
-              
-              // Banking angle proportional to turn rate (max 30 degrees)
-              const maxBank = Cesium.Math.toRadians(30);
-              const turnSharpness = Math.abs(headingChange);
-              roll = Math.sign(headingChange) * Math.min(turnSharpness * 2, maxBank);
-            }
+            pitch = Math.atan2(altitudeChange, distance);
           } else {
-            // Last waypoint - maintain previous heading, level flight
-            if (flightData.length > 0) {
-              heading = flightData[flightData.length - 1].heading;
-            } else {
-              heading = Cesium.Math.toRadians(this.heading);
-            }
             pitch = 0;
-            roll = 0;
           }
           
           flightData.push({
-            time: time,
+            time: cumulativeTime,
             position: positions[i],
             heading: heading,
             pitch: pitch,
@@ -869,7 +875,7 @@
     // Object card HTML generation
     function createObjectCard(obj) {
       return `
-        <div class="object-card" id="card_${obj.id}">
+        <div class="object-card" id="card_${obj.id}" data-object-id="${obj.id}">
           <h4>
             ${obj.callsign} (${obj.type})
             <span style="font-size: 12px; color: #aaa;">#${obj.id}</span>
@@ -886,31 +892,31 @@
             </div>
             <div>
               <label>Longitude:</label>
-              <span>${obj.longitude.toFixed(6)}°</span>
+              <span class="longitude">${obj.longitude.toFixed(6)}°</span>
             </div>
             <div>
               <label>Latitude:</label>
-              <span>${obj.latitude.toFixed(6)}°</span>
+              <span class="latitude">${obj.latitude.toFixed(6)}°</span>
             </div>
             <div>
               <label>Speed:</label>
-              <span>${obj.speed.toFixed(0)} kts</span>
+              <span class="speed">${obj.speed.toFixed(0)} kts</span>
             </div>
             <div>
               <label>Altitude:</label>
-              <span>${(obj.altitude * 3.28084).toFixed(0)} ft</span>
+              <span class="altitude">${(obj.altitude * 3.28084).toFixed(0)} ft</span>
             </div>
             <div>
               <label>Heading:</label>
-              <span>${obj.heading.toFixed(0)}°</span>
+              <span class="heading">${obj.heading.toFixed(0)}°</span>
             </div>
             <div>
               <label>Pitch:</label>
-              <span>${obj.pitch.toFixed(1)}°</span>
+              <span class="pitch">${obj.pitch.toFixed(1)}°</span>
             </div>
             <div>
               <label>Bank:</label>
-              <span>${obj.roll.toFixed(1)}°</span>
+              <span class="roll">${obj.roll.toFixed(1)}°</span>
             </div>
             <div>
               <label>Fuel:</label>
@@ -974,32 +980,39 @@
               <span class="flight-status">${obj.isFlying ? 'FLYING' : obj.isPlanning ? 'PLANNING' : 'READY'}</span>
             </div>
             
-            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 8px 0;">
-              <div>
-                <label style="color: #aaa; font-size: 11px;">Flight Speed:</label>
-                <input class="editable" style="width: 60px;" value="${obj.flightSpeed}" onchange="updateFlightSpeed(${obj.id}, this.value)" placeholder="kts">
-              </div>
-              <div>
-                <label style="color: #aaa; font-size: 11px;">Heading:</label>
-                <input class="editable" style="width: 60px;" value="${obj.heading.toFixed(0)}" onchange="updateHeading(${obj.id}, this.value)" placeholder="deg">
-              </div>
-            </div>
-
             ${obj.waypoints.length > 0 ? `
               <div class="waypoint-list">
                 ${obj.waypoints.map((wp, index) => `
                   <div class="waypoint-item">
                     <div style="flex: 1;">
-                      <div style="color: #4a9eff; font-family: 'Courier New', monospace; font-size: 11px; margin-bottom: 2px;">
+                      <div style="color: #4a9eff; font-family: 'Courier New', monospace; font-size: 11px; margin-bottom: 4px;">
                         WP${index + 1}: ${wp.longitude.toFixed(4)}°, ${wp.latitude.toFixed(4)}°
                       </div>
-                      <div style="display: flex; align-items: center; gap: 4px;">
-                        <span style="color: #aaa; font-size: 10px;">Alt:</span>
-                        <input class="editable" style="width: 50px; font-size: 10px;" 
-                               value="${(wp.altitude * 3.28084).toFixed(0)}" 
-                               onchange="updateWaypointAltitude(${obj.id}, ${wp.id}, this.value)"
-                               placeholder="ft">
-                        <span style="color: #aaa; font-size: 10px;">ft</span>
+                      <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 6px; margin-bottom: 2px;">
+                        <div style="display: flex; align-items: center; gap: 2px;">
+                          <span style="color: #aaa; font-size: 10px;">Alt:</span>
+                          <input class="editable" style="width: 45px; font-size: 10px;" 
+                                 value="${(wp.altitude * 3.28084).toFixed(0)}" 
+                                 onchange="updateWaypointAltitude(${obj.id}, ${wp.id}, this.value)"
+                                 placeholder="ft">
+                          <span style="color: #aaa; font-size: 9px;">ft</span>
+                        </div>
+                        <div style="display: flex; align-items: center; gap: 2px;">
+                          <span style="color: #aaa; font-size: 10px;">Spd:</span>
+                          <input class="editable" style="width: 45px; font-size: 10px;" 
+                                 value="${wp.speed || obj.flightSpeed || 250}" 
+                                 onchange="updateWaypointSpeed(${obj.id}, ${wp.id}, this.value)"
+                                 placeholder="kts">
+                          <span style="color: #aaa; font-size: 9px;">kt</span>
+                        </div>
+                        <div style="display: flex; align-items: center; gap: 2px;">
+                          <span style="color: #aaa; font-size: 10px;">Hdg:</span>
+                          <input class="editable" style="width: 45px; font-size: 10px;" 
+                                 value="${wp.heading !== undefined ? wp.heading.toFixed(0) : 'Auto'}" 
+                                 onchange="updateWaypointHeading(${obj.id}, ${wp.id}, this.value)"
+                                 placeholder="deg">
+                          <span style="color: #aaa; font-size: 9px;">°</span>
+                        </div>
                       </div>
                     </div>
                     <div class="waypoint-controls">
@@ -1083,12 +1096,64 @@
       container.innerHTML = objects.map(obj => createObjectCard(obj)).join('');
     }
 
+    // Update only dynamic data without regenerating HTML (prevents input field resets)
+    function updateObjectData() {
+      objects.forEach(obj => {
+        const card = document.querySelector(`[data-object-id="${obj.id}"]`);
+        if (!card) return;
+
+        // Update span elements (display data)
+        const updateSpan = (selector, value) => {
+          const element = card.querySelector(selector);
+          if (element && element.tagName === 'SPAN') {
+            element.textContent = value;
+          }
+        };
+
+        // Update input elements (only if not focused by user)
+        const updateInput = (selector, value) => {
+          const element = card.querySelector(selector);
+          if (element && element.tagName === 'INPUT' && !element.matches(':focus')) {
+            element.value = value;
+          }
+        };
+
+        // Update real-time flight data (spans)
+        updateSpan('.longitude', obj.longitude.toFixed(6) + '°');
+        updateSpan('.latitude', obj.latitude.toFixed(6) + '°');
+        updateSpan('.altitude', (obj.altitude * 3.28084).toFixed(0) + ' ft');
+        updateSpan('.speed', obj.speed.toFixed(0) + ' kts');
+        updateSpan('.heading', obj.heading.toFixed(0) + '°');
+        updateSpan('.pitch', obj.pitch.toFixed(1) + '°');
+        updateSpan('.roll', obj.roll.toFixed(1) + '°');
+
+        // Update editable fields (inputs) - only when not being edited
+        const fuelInput = card.querySelector('input[onchange*="fuel"]');
+        if (fuelInput && !fuelInput.matches(':focus')) {
+          fuelInput.value = obj.fuel;
+        }
+        
+        const timeInput = card.querySelector('input[onchange*="timeOnStation"]');
+        if (timeInput && !timeInput.matches(':focus')) {
+          timeInput.value = obj.timeOnStation;
+        }
+        
+        const statusInput = card.querySelector('input[onchange*="status"]');
+        if (statusInput && !statusInput.matches(':focus')) {
+          statusInput.value = obj.status;
+        }
+
+        // NEVER update flight plan inputs to prevent editing issues
+        // Flight plan waypoint inputs are managed separately and should not be refreshed
+      });
+    }
+
     // Real-time updates
     function updateObjects() {
       objects.forEach(obj => {
         obj.updateCalculatedFields();
       });
-      updateObjectCards();
+      updateObjectData(); // Only update data, not full HTML regeneration
     }
 
     // Update more frequently for real-time flight data
@@ -1256,6 +1321,32 @@
       }
     }
 
+    function updateWaypointSpeed(objectId, waypointId, newSpeed) {
+      const obj = objects.find(obj => obj.id === objectId);
+      if (obj) {
+        const waypoint = obj.waypoints.find(wp => wp.id === waypointId);
+        if (waypoint) {
+          waypoint.speed = parseFloat(newSpeed) || 250; // Default to 250 knots
+          obj.updateFlightPath();
+        }
+      }
+    }
+
+    function updateWaypointHeading(objectId, waypointId, newHeading) {
+      const obj = objects.find(obj => obj.id === objectId);
+      if (obj) {
+        const waypoint = obj.waypoints.find(wp => wp.id === waypointId);
+        if (waypoint) {
+          if (newHeading === 'Auto' || newHeading === '' || isNaN(parseFloat(newHeading))) {
+            waypoint.heading = undefined; // Auto-calculate
+          } else {
+            waypoint.heading = parseFloat(newHeading);
+          }
+          obj.updateFlightPath();
+        }
+      }
+    }
+
     // DEBUG FUNCTIONS for testing orientation and position changes
     function testBankAngle(id) {
       const obj = objects.find(obj => obj.id === id);
@@ -1378,6 +1469,8 @@
     window.updateFlightSpeed = updateFlightSpeed;
     window.updateHeading = updateHeading;
     window.updateWaypointAltitude = updateWaypointAltitude;
+    window.updateWaypointSpeed = updateWaypointSpeed;
+    window.updateWaypointHeading = updateWaypointHeading;
     window.testBankAngle = testBankAngle;
     window.testAltitude = testAltitude;
     window.testReset = testReset;
