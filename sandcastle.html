@@ -381,30 +381,47 @@
           }
         }
 
-        const orientation = this.entity.orientation?.getValue(currentTime);
-        if (orientation && position) {
-          try {
-            // Use the position-aware HPR conversion
-            const hpr = Cesium.HeadingPitchRoll.fromQuaternion(orientation, position);
-            
-            // Convert from Cesium coordinate system to aviation coordinate system
-            // When creating: cesiumHeading = aviationHeading - 90
-            // When reading back: aviationHeading = cesiumHeading + 90
-            let heading = Cesium.Math.toDegrees(hpr.heading) + 90;
-            if (heading >= 360) heading -= 360;
-            if (heading < 0) heading += 360;
-            
-            // Pitch and roll should be correct as-is
-            const pitch = Cesium.Math.toDegrees(hpr.pitch);
-            const roll = Cesium.Math.toDegrees(hpr.roll);
-            
-            this.heading = heading;
-            this.pitch = pitch;
-            this.roll = roll;
-            
-          } catch (e) {
-            // Keep existing values if calculation fails
-            console.error('Orientation calculation error:', e);
+        // Extract current orientation from the dynamic flight animation
+        if (this.isFlying && this.entity.orientation) {
+          const orientation = this.entity.orientation.getValue(currentTime);
+          if (orientation && position) {
+            try {
+              // Create the local reference frame at the aircraft's position
+              const transform = Cesium.Transforms.eastNorthUpToFixedFrame(position);
+              const transformMatrix = Cesium.Matrix4.getMatrix3(transform, new Cesium.Matrix3());
+              
+              // Convert quaternion to rotation matrix
+              const orientationMatrix = Cesium.Matrix3.fromQuaternion(orientation);
+              
+              // Transform to local coordinate system
+              const localMatrix = Cesium.Matrix3.multiply(
+                Cesium.Matrix3.transpose(transformMatrix, new Cesium.Matrix3()),
+                orientationMatrix,
+                new Cesium.Matrix3()
+              );
+              
+              // Extract Euler angles from the local rotation matrix
+              // Using the ZYX rotation order (yaw-pitch-roll)
+              const m = localMatrix;
+              
+              // Calculate pitch (rotation about Y axis)
+              const pitch = Math.asin(-m[6]); // -sin(pitch) = -m[2][0]
+              
+              // Calculate heading (rotation about Z axis)  
+              let heading = Math.atan2(m[3], m[0]); // atan2(sin(yaw), cos(yaw))
+              
+              // Calculate roll (rotation about X axis)
+              const roll = Math.atan2(m[7], m[8]); // atan2(sin(roll), cos(roll))
+              
+              // Convert to degrees and adjust coordinate system
+              this.heading = (Cesium.Math.toDegrees(heading) + 90 + 360) % 360;
+              this.pitch = Cesium.Math.toDegrees(pitch);
+              this.roll = Cesium.Math.toDegrees(roll);
+              
+            } catch (e) {
+              console.error('Error extracting orientation:', e);
+              // Keep existing values if calculation fails
+            }
           }
         }
         
