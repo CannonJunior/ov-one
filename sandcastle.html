@@ -640,24 +640,79 @@
           while (headingChange < -Math.PI) headingChange += 2 * Math.PI;
           
           if (Math.abs(headingChange) > 0.01) {
-            // Calculate turn duration based on platform turn rate
-            const turnDuration = Math.abs(Cesium.Math.toDegrees(headingChange)) / this.turnRate; // seconds
+            const headingChangeDegrees = Math.abs(Cesium.Math.toDegrees(headingChange));
             
-            // Calculate lead time needed to complete turn by waypoint
-            const leadTime = turnDuration * 0.5; // Start turn halfway before waypoint arrival
-            const turnWPTime = flightData[i].time;
-            const leadTurnStartTime = turnWPTime - (leadTime * 1000); // Convert to milliseconds
-            
-            leadTurnData.push({
-              waypointIndex: i,
-              leadTurnStartTime: leadTurnStartTime,
-              turnDuration: turnDuration * 1000, // Convert to milliseconds
-              headingChange: headingChange,
-              inboundCourse: inboundCourse,
-              outboundCourse: outboundCourse,
-              turnWaypoint: turnWP,
-              nextWaypoint: outboundWP
-            });
+            // For turns ≥90°, split into two steps to prevent abrupt heading changes
+            if (headingChangeDegrees >= 90) {
+              // Step 1: Turn 89° toward target
+              const firstTurnDegrees = 89;
+              const firstTurnRadians = Math.sign(headingChange) * Cesium.Math.toRadians(firstTurnDegrees);
+              const firstTurnDuration = firstTurnDegrees / this.turnRate; // seconds
+              
+              // Step 2: Complete remaining turn
+              const remainingTurnDegrees = headingChangeDegrees - firstTurnDegrees;
+              const remainingTurnRadians = Math.sign(headingChange) * Cesium.Math.toRadians(remainingTurnDegrees);
+              const remainingTurnDuration = remainingTurnDegrees / this.turnRate; // seconds
+              
+              const totalTurnDuration = firstTurnDuration + remainingTurnDuration;
+              
+              // Calculate intermediate heading after first 89° turn
+              const intermediateHeading = inboundCourse + firstTurnRadians;
+              
+              // Calculate lead time for the entire two-step turn
+              const leadTime = totalTurnDuration * 0.5;
+              const turnWPTime = flightData[i].time;
+              const leadTurnStartTime = turnWPTime - (leadTime * 1000);
+              
+              // First turn phase
+              leadTurnData.push({
+                waypointIndex: i,
+                leadTurnStartTime: leadTurnStartTime,
+                turnDuration: firstTurnDuration * 1000, // Convert to milliseconds
+                headingChange: firstTurnRadians,
+                inboundCourse: inboundCourse,
+                outboundCourse: intermediateHeading,
+                turnWaypoint: turnWP,
+                nextWaypoint: outboundWP,
+                isFirstPhase: true,
+                totalTurnPhases: 2
+              });
+              
+              // Second turn phase (starts immediately after first phase)
+              leadTurnData.push({
+                waypointIndex: i,
+                leadTurnStartTime: leadTurnStartTime + (firstTurnDuration * 1000),
+                turnDuration: remainingTurnDuration * 1000, // Convert to milliseconds
+                headingChange: remainingTurnRadians,
+                inboundCourse: intermediateHeading,
+                outboundCourse: outboundCourse,
+                turnWaypoint: turnWP,
+                nextWaypoint: outboundWP,
+                isSecondPhase: true,
+                totalTurnPhases: 2
+              });
+              
+            } else {
+              // Single-step turn for turns <90°
+              const turnDuration = headingChangeDegrees / this.turnRate; // seconds
+              
+              // Calculate lead time needed to complete turn by waypoint
+              const leadTime = turnDuration * 0.5; // Start turn halfway before waypoint arrival
+              const turnWPTime = flightData[i].time;
+              const leadTurnStartTime = turnWPTime - (leadTime * 1000); // Convert to milliseconds
+              
+              leadTurnData.push({
+                waypointIndex: i,
+                leadTurnStartTime: leadTurnStartTime,
+                turnDuration: turnDuration * 1000, // Convert to milliseconds
+                headingChange: headingChange,
+                inboundCourse: inboundCourse,
+                outboundCourse: outboundCourse,
+                turnWaypoint: turnWP,
+                nextWaypoint: outboundWP,
+                totalTurnPhases: 1
+              });
+            }
           }
         }
 
@@ -836,7 +891,22 @@
                   bankingFactor = Math.sin((1 - clampedHeadingProgress) * Math.PI); // 1 to 0
                 }
                 
-                const turnIntensity = Math.abs(Cesium.Math.toDegrees(headingChange));
+                // Adjust banking based on turn phase for two-step turns
+                let turnIntensity = Math.abs(Cesium.Math.toDegrees(headingChange));
+                
+                // For two-step turns, maintain consistent banking between phases
+                if (turnData.totalTurnPhases === 2) {
+                  if (turnData.isFirstPhase) {
+                    // First 89° turn - use full banking
+                    turnIntensity = 89;
+                  } else if (turnData.isSecondPhase) {
+                    // Remaining turn - continue with appropriate banking for remaining degrees
+                    // Banking should be continuous from first phase
+                    const remainingDegrees = turnIntensity;
+                    turnIntensity = Math.max(remainingDegrees, 30); // Minimum 30° banking for small remaining turns
+                  }
+                }
+                
                 const maxBankAngle = Cesium.Math.toRadians(Math.min(turnIntensity, 60));
                 dynamicRoll = Math.sign(headingChange) * maxBankAngle * bankingFactor;
                 
