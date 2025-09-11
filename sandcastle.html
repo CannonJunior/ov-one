@@ -465,7 +465,7 @@
         this.waypoints.push({
           longitude: longitude,
           latitude: latitude,
-          altitude: altitude || 10000,
+          altitude: altitude || 0, // Default to 0 altitude
           speed: this.flightSpeed || 250, // Default speed in knots
           heading: undefined, // Auto-calculate heading
           id: Date.now()
@@ -747,39 +747,79 @@
             
             let intermediatePosition;
             if (inTurn && turnData) {
-              // Calculate curved path during turn
+              // Calculate physics-based curved path during banked turn
               const turnProgress = (intermediateTime - turnData.leadTurnStartTime) / turnData.turnDuration;
               const clampedProgress = Math.max(0, Math.min(1, turnProgress));
               
-              // Create an arc instead of straight line
-              const centerFactor = 0.5; // Arc peak at midpoint
-              const arcHeight = Math.abs(turnData.headingChange) * 1000; // Arc height based on turn angle
-              const arcOffset = Math.sin(clampedProgress * Math.PI) * arcHeight;
+              // Physics-based turn radius calculation: R = V²/(11.26 × tan(bank_angle))
+              const speedKnots = 250; // Current flight speed in knots
+              const headingChangeDegrees = Math.abs(Cesium.Math.toDegrees(turnData.headingChange));
               
-              // Base position from linear interpolation
-              const basePosition = new Cesium.Cartesian3();
-              Cesium.Cartesian3.lerp(currentWP.position, nextWP.position, factor, basePosition);
+              // Calculate bank angle based on turn intensity (more realistic than arbitrary values)
+              let bankAngleDegrees;
+              if (turnData.totalTurnPhases === 2) {
+                // Two-phase turn: maintain higher banking for smoother turns
+                bankAngleDegrees = turnData.isFirstPhase ? 45 : Math.max(30, headingChangeDegrees * 0.6);
+              } else {
+                // Single-phase turn: bank angle proportional to turn intensity
+                if (headingChangeDegrees <= 15) {
+                  bankAngleDegrees = 15; // Shallow turns
+                } else if (headingChangeDegrees <= 45) {
+                  bankAngleDegrees = 30; // Standard turns
+                } else {
+                  bankAngleDegrees = 45; // Steep turns
+                }
+              }
               
-              // Add perpendicular offset for turn arc
+              // Calculate turn radius using aviation physics formula: R = V²/(11.26 × tan(θ))
+              const bankAngleRadians = Cesium.Math.toRadians(bankAngleDegrees);
+              const turnRadiusNM = (speedKnots * speedKnots) / (11.26 * Math.tan(bankAngleRadians));
+              const turnRadiusMeters = turnRadiusNM * 1852; // Convert nautical miles to meters
+              
+              // Alternative physics formula: R = V²/(g × tan(θ)) for cross-validation
+              const speedMs = speedKnots * 0.514444; // Convert knots to m/s
+              const g = 9.81; // gravitational acceleration
+              const turnRadiusPhysics = (speedMs * speedMs) / (g * Math.tan(bankAngleRadians));
+              
+              // Use the aviation-specific formula (typically gives larger, more realistic radii)
+              const actualTurnRadius = turnRadiusMeters;
+              
+              // Calculate turn center point perpendicular to inbound course
               const currentCart = Cesium.Cartographic.fromCartesian(currentWP.position);
               const nextCart = Cesium.Cartographic.fromCartesian(nextWP.position);
               
-              // Calculate perpendicular direction (simplified for small distances)
-              const bearing = Math.atan2(
+              // Calculate inbound course bearing
+              const inboundBearing = Math.atan2(
                 Math.sin(nextCart.longitude - currentCart.longitude) * Math.cos(nextCart.latitude),
                 Math.cos(currentCart.latitude) * Math.sin(nextCart.latitude) - 
                 Math.sin(currentCart.latitude) * Math.cos(nextCart.latitude) * Math.cos(nextCart.longitude - currentCart.longitude)
               );
               
-              const perpBearing = bearing + (Math.sign(turnData.headingChange) * Math.PI / 2);
-              const offsetLat = currentCart.latitude + (arcOffset * Math.cos(perpBearing)) / 111000;
-              const offsetLon = currentCart.longitude + (arcOffset * Math.sin(perpBearing)) / (111000 * Math.cos(currentCart.latitude));
+              // Determine turn center direction (90° perpendicular to inbound course)
+              const turnDirection = Math.sign(turnData.headingChange);
+              const centerBearing = inboundBearing + (turnDirection * Math.PI / 2);
+              
+              // Calculate turn center position
+              const centerDistanceFromStart = actualTurnRadius * Math.sin(Math.abs(turnData.headingChange) / 2);
+              const centerLat = currentCart.latitude + (centerDistanceFromStart * Math.cos(centerBearing)) / 111000;
+              const centerLon = currentCart.longitude + (centerDistanceFromStart * Math.sin(centerBearing)) / (111000 * Math.cos(currentCart.latitude));
+              
+              // Calculate aircraft position on the circular arc
+              const currentAngle = turnData.headingChange * clampedProgress;
+              const arcBearing = centerBearing - (turnDirection * Math.PI / 2) + currentAngle;
+              
+              const arcLat = centerLat + (actualTurnRadius * Math.cos(arcBearing)) / 111000;
+              const arcLon = centerLon + (actualTurnRadius * Math.sin(arcBearing)) / (111000 * Math.cos(centerLat));
               
               intermediatePosition = Cesium.Cartesian3.fromDegrees(
-                Cesium.Math.toDegrees(offsetLon),
-                Cesium.Math.toDegrees(offsetLat),
+                Cesium.Math.toDegrees(arcLon),
+                Cesium.Math.toDegrees(arcLat),
                 currentCart.height + (nextCart.height - currentCart.height) * factor
               );
+              
+              // Store calculated bank angle for orientation property
+              turnData.calculatedBankAngle = bankAngleDegrees;
+              
             } else {
               // Straight line interpolation when not turning
               intermediatePosition = new Cesium.Cartesian3();
@@ -891,23 +931,29 @@
                   bankingFactor = Math.sin((1 - clampedHeadingProgress) * Math.PI); // 1 to 0
                 }
                 
-                // Adjust banking based on turn phase for two-step turns
-                let turnIntensity = Math.abs(Cesium.Math.toDegrees(headingChange));
-                
-                // For two-step turns, maintain consistent banking between phases
-                if (turnData.totalTurnPhases === 2) {
-                  if (turnData.isFirstPhase) {
-                    // First 89° turn - use full banking
-                    turnIntensity = 89;
-                  } else if (turnData.isSecondPhase) {
-                    // Remaining turn - continue with appropriate banking for remaining degrees
-                    // Banking should be continuous from first phase
-                    const remainingDegrees = turnIntensity;
-                    turnIntensity = Math.max(remainingDegrees, 30); // Minimum 30° banking for small remaining turns
+                // Use physics-based banking calculated during position interpolation
+                let bankAngleDegrees;
+                if (turnData.calculatedBankAngle) {
+                  // Use the bank angle calculated from physics-based turn radius
+                  bankAngleDegrees = turnData.calculatedBankAngle;
+                } else {
+                  // Fallback to intensity-based banking for backward compatibility
+                  let turnIntensity = Math.abs(Cesium.Math.toDegrees(headingChange));
+                  
+                  // For two-step turns, maintain consistent banking between phases
+                  if (turnData.totalTurnPhases === 2) {
+                    if (turnData.isFirstPhase) {
+                      bankAngleDegrees = 45; // First 89° turn - use full banking
+                    } else if (turnData.isSecondPhase) {
+                      // Remaining turn - continue with appropriate banking
+                      bankAngleDegrees = Math.max(turnIntensity * 0.6, 30);
+                    }
+                  } else {
+                    bankAngleDegrees = Math.min(turnIntensity, 60);
                   }
                 }
                 
-                const maxBankAngle = Cesium.Math.toRadians(Math.min(turnIntensity, 60));
+                const maxBankAngle = Cesium.Math.toRadians(bankAngleDegrees);
                 dynamicRoll = Math.sign(headingChange) * maxBankAngle * bankingFactor;
                 
                 // Stop turning when we reach the outbound course
@@ -1391,6 +1437,7 @@
 
     // Flight planning global variables
     let currentPlanningObject = null;
+    let waypointPreviewPoint = null;
 
     // Flight planning functions
     function toggleFlightPlanning(id) {
@@ -1402,6 +1449,11 @@
         obj.isPlanning = false;
         currentPlanningObject = null;
         document.getElementById(`card_${id}`).classList.remove('planning-mode');
+        
+        // Hide waypoint preview point
+        if (waypointPreviewPoint) {
+          waypointPreviewPoint.show = false;
+        }
       } else {
         // Stop any other object's planning mode
         objects.forEach(o => {
@@ -1413,6 +1465,11 @@
         obj.isPlanning = true;
         currentPlanningObject = obj;
         document.getElementById(`card_${id}`).classList.add('planning-mode');
+        
+        // Enable waypoint preview point (will be shown on first mouse move)
+        if (waypointPreviewPoint) {
+          waypointPreviewPoint.show = false; // Will be shown when mouse moves over terrain
+        }
       }
       
       updateObjectCards();
@@ -1614,6 +1671,62 @@
       }
     }
 
+    // Create waypoint preview point
+    function createWaypointPreviewPoint() {
+      if (waypointPreviewPoint) {
+        viewer.entities.remove(waypointPreviewPoint);
+      }
+      
+      waypointPreviewPoint = viewer.entities.add({
+        id: 'waypoint_preview',
+        name: 'Next Waypoint Preview',
+        position: Cesium.Cartesian3.fromDegrees(0, 0, 0), // Will be updated on mouse move
+        point: {
+          pixelSize: 12,
+          color: Cesium.Color.YELLOW.withAlpha(0.8),
+          outlineColor: Cesium.Color.BLACK,
+          outlineWidth: 2,
+          heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
+          disableDepthTestDistance: Number.POSITIVE_INFINITY
+        },
+        label: {
+          text: 'Next Waypoint',
+          font: '12pt sans-serif',
+          fillColor: Cesium.Color.YELLOW,
+          outlineColor: Cesium.Color.BLACK,
+          outlineWidth: 2,
+          style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+          pixelOffset: new Cesium.Cartesian2(0, -30),
+          disableDepthTestDistance: Number.POSITIVE_INFINITY
+        },
+        show: false // Initially hidden
+      });
+    }
+
+    // Mouse move handler for waypoint preview
+    viewer.cesiumWidget.canvas.addEventListener('mousemove', function(e) {
+      if (!currentPlanningObject || !waypointPreviewPoint) return;
+
+      const pick = viewer.camera.getPickRay(new Cesium.Cartesian2(e.clientX, e.clientY));
+      const pickedPosition = viewer.scene.globe.pick(pick, viewer.scene);
+      
+      if (pickedPosition) {
+        // Update preview point position at ground level (zero altitude)
+        const cartographic = Cesium.Cartographic.fromCartesian(pickedPosition);
+        const longitude = Cesium.Math.toDegrees(cartographic.longitude);
+        const latitude = Cesium.Math.toDegrees(cartographic.latitude);
+        
+        // Set position at zero altitude (ground level)
+        waypointPreviewPoint.position = Cesium.Cartesian3.fromDegrees(longitude, latitude, 0);
+        waypointPreviewPoint.show = true;
+        
+        // Update label with coordinates
+        waypointPreviewPoint.label.text = `Next WP: ${longitude.toFixed(4)}°, ${latitude.toFixed(4)}°`;
+      } else {
+        waypointPreviewPoint.show = false;
+      }
+    }, false);
+
     // Click handler for waypoint creation
     viewer.cesiumWidget.canvas.addEventListener('click', function(e) {
       if (!currentPlanningObject) return;
@@ -1625,12 +1738,15 @@
         const cartographic = Cesium.Cartographic.fromCartesian(pickedPosition);
         const longitude = Cesium.Math.toDegrees(cartographic.longitude);
         const latitude = Cesium.Math.toDegrees(cartographic.latitude);
-        const altitude = 10000; // Default altitude
+        const altitude = 0; // Start at 0 altitude
 
         currentPlanningObject.addWaypoint(longitude, latitude, altitude);
         updateObjectCards();
       }
     }, false);
+
+    // Initialize waypoint preview point
+    createWaypointPreviewPoint();
 
     // Make functions global for onclick handlers
     window.updateObjectField = updateObjectField;
