@@ -271,6 +271,43 @@
     let objects = [];
     let nextObjectId = 1;
 
+    // Object styling configuration
+    const ObjectStyleConfig = {
+      countries: {
+        "USA": {
+          fontColor: "#0000FF",
+          flightPathColor: "#0000FF"
+        },
+        "China": {
+          fontColor: "#FF0000", 
+          flightPathColor: "#FF0000"
+        }
+      },
+      aircraftMapping: {
+        "J-20 Mighty Dragon": "China",
+        "F-35 Lightning II": "USA"
+      },
+      default: {
+        fontColor: "#4a9eff",
+        flightPathColor: "#00FFFF"
+      }
+    };
+
+    // Function to determine country based on aircraft type
+    function getCountryFromAircraftType(aircraftType) {
+      for (const [aircraft, country] of Object.entries(ObjectStyleConfig.aircraftMapping)) {
+        if (aircraftType.includes(aircraft)) {
+          return country;
+        }
+      }
+      return "USA"; // Default fallback
+    }
+
+    // Function to get styling for a country
+    function getCountryStyle(country) {
+      return ObjectStyleConfig.countries[country] || ObjectStyleConfig.default;
+    }
+
     // Platform-specific turn rates (degrees per second)
     const PLATFORM_TURN_RATES = {
       'Fighter': 20,
@@ -297,8 +334,8 @@
         this.pitch = 0;
         this.roll = 0;
         
-        // Editable metadata
-        this.country = 'USA';
+        // Editable metadata - determine country from aircraft type
+        this.country = getCountryFromAircraftType(type);
         this.callsign = `${type}${String(this.id).padStart(2, '0')}`;
         this.fuel = '75%';
         this.timeOnStation = '2h 15m';
@@ -493,13 +530,17 @@
             Cesium.Cartesian3.fromDegrees(wp.longitude, wp.latitude, wp.altitude)
           );
 
+          // Get country-specific color for flight path
+          const countryStyle = getCountryStyle(this.country);
+          const flightPathColor = Cesium.Color.fromCssColorString(countryStyle.flightPathColor);
+
           this.flightPath = viewer.entities.add({
             id: `flightPath_${this.id}`,
             name: `${this.callsign} Flight Path`,
             polyline: {
               positions: positions,
               width: 3,
-              material: Cesium.Color.CYAN,
+              material: flightPathColor,
               clampToGround: false,
               followSurface: false,
             }
@@ -981,9 +1022,12 @@
 
     // Object card HTML generation
     function createObjectCard(obj) {
+      // Get country-specific styling
+      const countryStyle = getCountryStyle(obj.country);
+      
       return `
         <div class="object-card" id="card_${obj.id}" data-object-id="${obj.id}">
-          <h4>
+          <h4 style="color: ${countryStyle.fontColor};">
             ${obj.callsign} (${obj.type})
             <span style="font-size: 12px; color: #aaa;">#${obj.id}</span>
           </h4>

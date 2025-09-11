@@ -25,15 +25,99 @@
       float: left;
     }
 
-    #add-object-toolbar {
+    .cesium-viewer-toolbar {
       position: absolute;
       top: 10px;
-      left: 10px;
+      left: 40px; /* Move right to make room for toggle */
+      z-index: 100;
+      transition: transform 0.3s ease;
+    }
+
+    .cesium-viewer-toolbar.hidden {
+      transform: translateX(-100%);
+    }
+
+    #flight-management-container {
+      position: absolute;
+      top: 10px;
+      right: 370px; /* 350px panel width + 20px gap */
+      z-index: 100;
+      display: flex;
+      align-items: flex-start;
+      gap: 5px;
+      transition: transform 0.3s ease;
+    }
+
+    #flight-management-container.hidden {
+      display: none;
+    }
+
+    #add-object-toolbar {
       background: rgba(42, 42, 42, 0.9);
       padding: 10px;
       border-radius: 5px;
-      z-index: 100;
       box-shadow: 0 2px 10px rgba(0,0,0,0.3);
+      transition: transform 0.3s ease;
+    }
+
+    #add-object-toolbar.hidden {
+      transform: translateX(-100%);
+    }
+
+    #toolbar-toggle {
+      position: absolute;
+      top: 10px; /* Aligned with flight management container */
+      right: 340px; /* Just to the left of flight management container */
+      z-index: 101; /* Above other elements */
+      background: rgba(42, 42, 42, 0.9);
+      border: 1px solid #666;
+      color: white;
+      padding: 5px 8px;
+      border-radius: 3px;
+      cursor: pointer;
+      font-size: 12px;
+    }
+
+    #toolbar-toggle:hover {
+      background: rgba(60, 60, 60, 0.9);
+    }
+
+    #cesium-toolbar-toggle {
+      position: absolute;
+      top: 10px; /* Aligned with cesium toolbar */
+      left: 10px; /* At the left edge, before cesium toolbar */
+      z-index: 101; /* Above cesium toolbar */
+      background: rgba(42, 42, 42, 0.9);
+      border: 1px solid #666;
+      color: white;
+      padding: 5px 8px;
+      border-radius: 3px;
+      cursor: pointer;
+      font-size: 12px;
+    }
+
+    #cesium-toolbar-toggle:hover {
+      background: rgba(60, 60, 60, 0.9);
+    }
+
+    #load-flight-btn {
+      background: #4a9eff;
+      color: white;
+      border: none;
+      padding: 8px 12px;
+      border-radius: 3px;
+      cursor: pointer;
+      font-size: 14px;
+      margin-bottom: 10px;
+      width: 100%;
+    }
+
+    #load-flight-btn:hover {
+      background: #3a8eef;
+    }
+
+    #load-flight-input {
+      display: none;
     }
     
     #modelSelect {
@@ -229,6 +313,58 @@
     .planning-mode h4 {
       color: #4a9a4a !important;
     }
+
+    #global-controls {
+      display: flex;
+      gap: 10px;
+      margin-bottom: 15px;
+      padding-bottom: 10px;
+      border-bottom: 1px solid #555;
+    }
+
+    .object-card-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      cursor: pointer;
+      margin-bottom: 10px;
+    }
+
+    .object-card-header h4 {
+      margin: 0;
+      flex: 1;
+    }
+
+    .caret {
+      width: 0;
+      height: 0;
+      border-left: 6px solid #aaa;
+      border-top: 6px solid transparent;
+      border-bottom: 6px solid transparent;
+      transition: transform 0.2s ease;
+      margin-left: 10px;
+      cursor: pointer;
+    }
+
+    .caret.collapsed {
+      transform: rotate(-90deg);
+    }
+
+    .object-card-content {
+      transition: max-height 0.3s ease, opacity 0.3s ease;
+      overflow: hidden;
+      max-height: 2000px;
+      opacity: 1;
+    }
+
+    .object-card-content.collapsed {
+      max-height: 0;
+      opacity: 0;
+    }
+
+    .object-card.collapsed {
+      padding-bottom: 15px;
+    }
   </style>
 
 </head>
@@ -237,14 +373,31 @@
 
   <div id="cesiumContainer"></div>
   
-  <div id="add-object-toolbar">
-    <select id="modelSelect">
-      <option value="">Add New Object</option>
-    </select>
+  <div class="cesium-viewer-toolbar">
+    <!-- Cesium's built-in toolbar content will appear here -->
   </div>
+  
+  <div id="cesium-toolbar-toggle" onclick="toggleCesiumToolbar()">◀</div>
+  
+  <div id="flight-management-container">
+    <div id="add-object-toolbar">
+      <button id="load-flight-btn" onclick="triggerFileLoad()">Load Flight</button>
+      <input type="file" id="load-flight-input" accept=".json" onchange="loadFlightData(event)">
+      <select id="modelSelect">
+        <option value="">Add New Object</option>
+      </select>
+    </div>
+  </div>
+  
+  <div id="toolbar-toggle" onclick="toggleToolbar()">◀</div>
 
   <div id="objects-panel">
     <h3>Active Objects</h3>
+    <div id="global-controls">
+      <button class="btn" onclick="startAllFlights()">Start All Flights</button>
+      <button class="btn danger" onclick="stopAllFlights()">Stop All Flights</button>
+      <button class="btn" onclick="saveAllObjects()">Save All</button>
+    </div>
     <div id="object-cards-container"></div>
   </div>
 
@@ -270,6 +423,117 @@
     // Global object management
     let objects = [];
     let nextObjectId = 1;
+
+    // Object styling configuration
+    const ObjectStyleConfig = {
+      countries: {
+        "USA": {
+          fontColor: "#0000FF",
+          flightPathColor: "#0000FF"
+        },
+        "China": {
+          fontColor: "#FF0000", 
+          flightPathColor: "#FF0000"
+        }
+      },
+      aircraftMapping: {
+        "J-20 Mighty Dragon": "China",
+        "F-35 Lightning II": "USA"
+      },
+      default: {
+        fontColor: "#4a9eff",
+        flightPathColor: "#00FFFF"
+      }
+    };
+
+    // Function to determine country based on aircraft type
+    function getCountryFromAircraftType(aircraftType) {
+      for (const [aircraft, country] of Object.entries(ObjectStyleConfig.aircraftMapping)) {
+        if (aircraftType.includes(aircraft)) {
+          return country;
+        }
+      }
+      return "USA"; // Default fallback
+    }
+
+    // Function to get styling for a country
+    function getCountryStyle(country) {
+      return ObjectStyleConfig.countries[country] || ObjectStyleConfig.default;
+    }
+
+    // JSON Schema for object and flight plan data
+    const ObjectDataSchema = {
+      type: "object",
+      properties: {
+        version: { type: "string", description: "Schema version" },
+        timestamp: { type: "string", description: "Save timestamp" },
+        objects: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              id: { type: "number" },
+              type: { type: "string" },
+              modelUrl: { type: "string" },
+              platform: { type: "string" },
+              position: {
+                type: "object",
+                properties: {
+                  longitude: { type: "number" },
+                  latitude: { type: "number" },
+                  altitude: { type: "number" }
+                },
+                required: ["longitude", "latitude", "altitude"]
+              },
+              orientation: {
+                type: "object",
+                properties: {
+                  heading: { type: "number" },
+                  pitch: { type: "number" },
+                  roll: { type: "number" }
+                },
+                required: ["heading", "pitch", "roll"]
+              },
+              metadata: {
+                type: "object",
+                properties: {
+                  callsign: { type: "string" },
+                  country: { type: "string" },
+                  fuel: { type: "string" },
+                  timeOnStation: { type: "string" },
+                  loadout: { type: "string" },
+                  status: { type: "string" },
+                  mission: { type: "string" },
+                  task: { type: "string" }
+                }
+              },
+              flightPlan: {
+                type: "object",
+                properties: {
+                  waypoints: {
+                    type: "array",
+                    items: {
+                      type: "object",
+                      properties: {
+                        longitude: { type: "number" },
+                        latitude: { type: "number" },
+                        altitude: { type: "number" },
+                        speed: { type: "number" },
+                        heading: { type: "number" }
+                      },
+                      required: ["longitude", "latitude", "altitude"]
+                    }
+                  },
+                  flightSpeed: { type: "number" }
+                }
+              }
+            },
+            required: ["id", "type", "modelUrl", "platform", "position", "orientation", "metadata"]
+          }
+        }
+      },
+      required: ["version", "timestamp", "objects"]
+    };
 
     // Platform-specific turn rates (degrees per second)
     const PLATFORM_TURN_RATES = {
@@ -297,8 +561,8 @@
         this.pitch = 0;
         this.roll = 0;
         
-        // Editable metadata
-        this.country = 'USA';
+        // Editable metadata - determine country from aircraft type
+        this.country = getCountryFromAircraftType(type);
         this.callsign = `${type}${String(this.id).padStart(2, '0')}`;
         this.fuel = '75%';
         this.timeOnStation = '2h 15m';
@@ -493,13 +757,17 @@
             Cesium.Cartesian3.fromDegrees(wp.longitude, wp.latitude, wp.altitude)
           );
 
+          // Get country-specific color for flight path
+          const countryStyle = getCountryStyle(this.country);
+          const flightPathColor = Cesium.Color.fromCssColorString(countryStyle.flightPathColor);
+
           this.flightPath = viewer.entities.add({
             id: `flightPath_${this.id}`,
             name: `${this.callsign} Flight Path`,
             polyline: {
               positions: positions,
               width: 3,
-              material: Cesium.Color.CYAN,
+              material: flightPathColor,
               clampToGround: false,
               followSurface: false,
             }
@@ -1097,12 +1365,19 @@
 
     // Object card HTML generation
     function createObjectCard(obj) {
+      // Get country-specific styling
+      const countryStyle = getCountryStyle(obj.country);
+      
       return `
         <div class="object-card" id="card_${obj.id}" data-object-id="${obj.id}">
-          <h4>
-            ${obj.callsign} (${obj.type})
-            <span style="font-size: 12px; color: #aaa;">#${obj.id}</span>
-          </h4>
+          <div class="object-card-header" onclick="toggleCard(${obj.id})">
+            <h4 style="color: ${countryStyle.fontColor};">
+              ${obj.callsign} (${obj.type})
+              <span style="font-size: 12px; color: #aaa;">#${obj.id}</span>
+            </h4>
+            <div class="caret" id="caret_${obj.id}"></div>
+          </div>
+          <div class="object-card-content" id="content_${obj.id}">
           
           <div class="object-info">
             <div>
@@ -1175,6 +1450,7 @@
             <button class="btn" onclick="focusObject(${obj.id})">Focus</button>
             <button class="btn" onclick="trackObject(${obj.id})">Track</button>
             <button class="btn" onclick="duplicateObject(${obj.id})">Duplicate</button>
+            <button class="btn" onclick="saveObject(${obj.id})">Save</button>
             <button class="btn danger" onclick="removeObject(${obj.id})">Remove</button>
           </div>
 
@@ -1245,6 +1521,7 @@
                 `).join('')}
               </div>
             ` : ''}
+          </div>
           </div>
         </div>
       `;
@@ -1748,6 +2025,247 @@
     // Initialize waypoint preview point
     createWaypointPreviewPoint();
 
+    // Global flight control functions
+    function startAllFlights() {
+      objects.forEach(obj => {
+        if (obj.waypoints.length >= 2 && !obj.isFlying) {
+          obj.startFlight();
+        }
+      });
+      updateObjectCards();
+    }
+
+    function stopAllFlights() {
+      objects.forEach(obj => {
+        if (obj.isFlying) {
+          obj.stopFlight();
+        }
+      });
+      updateObjectCards();
+    }
+
+    // Card toggle functionality
+    function toggleCard(id) {
+      const card = document.getElementById(`card_${id}`);
+      const content = document.getElementById(`content_${id}`);
+      const caret = document.getElementById(`caret_${id}`);
+      
+      if (content && caret) {
+        const isCollapsed = content.classList.contains('collapsed');
+        
+        if (isCollapsed) {
+          // Expand
+          content.classList.remove('collapsed');
+          caret.classList.remove('collapsed');
+          card.classList.remove('collapsed');
+        } else {
+          // Collapse
+          content.classList.add('collapsed');
+          caret.classList.add('collapsed');
+          card.classList.add('collapsed');
+        }
+      }
+    }
+
+    // Toolbar toggle functionality
+    function toggleToolbar() {
+      const container = document.getElementById('flight-management-container');
+      const toggle = document.getElementById('toolbar-toggle');
+      
+      if (container.classList.contains('hidden')) {
+        container.classList.remove('hidden');
+        toggle.textContent = '◀';
+      } else {
+        container.classList.add('hidden');
+        toggle.textContent = '▶';
+      }
+    }
+
+    // Cesium toolbar toggle functionality
+    function toggleCesiumToolbar() {
+      const cesiumToolbar = document.querySelector('.cesium-viewer-toolbar');
+      const toggle = document.getElementById('cesium-toolbar-toggle');
+      
+      if (cesiumToolbar.classList.contains('hidden')) {
+        cesiumToolbar.classList.remove('hidden');
+        toggle.textContent = '◀';
+      } else {
+        cesiumToolbar.classList.add('hidden');
+        toggle.textContent = '▶';
+      }
+    }
+
+    // Convert object to JSON schema format
+    function objectToJSON(obj) {
+      return {
+        id: obj.id,
+        type: obj.type,
+        modelUrl: obj.modelUrl,
+        platform: obj.platform,
+        position: {
+          longitude: obj.longitude,
+          latitude: obj.latitude,
+          altitude: obj.altitude
+        },
+        orientation: {
+          heading: obj.heading,
+          pitch: obj.pitch,
+          roll: obj.roll
+        },
+        metadata: {
+          callsign: obj.callsign,
+          country: obj.country,
+          fuel: obj.fuel,
+          timeOnStation: obj.timeOnStation,
+          loadout: obj.loadout,
+          status: obj.status,
+          mission: obj.mission,
+          task: obj.task
+        },
+        flightPlan: {
+          waypoints: obj.waypoints.map(wp => ({
+            longitude: wp.longitude,
+            latitude: wp.latitude,
+            altitude: wp.altitude,
+            speed: wp.speed,
+            heading: wp.heading
+          })),
+          flightSpeed: obj.flightSpeed
+        }
+      };
+    }
+
+    // Save individual object
+    function saveObject(id) {
+      const obj = objects.find(obj => obj.id === id);
+      if (!obj) return;
+
+      const data = {
+        version: "1.0",
+        timestamp: new Date().toISOString(),
+        objects: [objectToJSON(obj)]
+      };
+
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${obj.callsign}_flight_plan.json`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    }
+
+    // Save all objects
+    function saveAllObjects() {
+      if (objects.length === 0) {
+        alert('No objects to save');
+        return;
+      }
+
+      const data = {
+        version: "1.0",
+        timestamp: new Date().toISOString(),
+        objects: objects.map(obj => objectToJSON(obj))
+      };
+
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `all_flight_plans_${new Date().toISOString().split('T')[0]}.json`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    }
+
+    // Trigger file load
+    function triggerFileLoad() {
+      document.getElementById('load-flight-input').click();
+    }
+
+    // Load flight data from JSON file
+    function loadFlightData(event) {
+      const file = event.target.files[0];
+      if (!file) return;
+
+      const reader = new FileReader();
+      reader.onload = function(e) {
+        try {
+          const data = JSON.parse(e.target.result);
+          
+          // Validate basic structure
+          if (!data.objects || !Array.isArray(data.objects)) {
+            throw new Error('Invalid file format: missing objects array');
+          }
+
+          // Load each object
+          data.objects.forEach(objData => {
+            const obj = new TrackedObject(objData.type, objData.modelUrl, objData.platform, objData.orientation.heading);
+            
+            // Set position
+            obj.longitude = objData.position.longitude;
+            obj.latitude = objData.position.latitude;
+            obj.altitude = objData.position.altitude;
+            
+            // Set orientation
+            obj.heading = objData.orientation.heading;
+            obj.pitch = objData.orientation.pitch;
+            obj.roll = objData.orientation.roll;
+            
+            // Set metadata
+            if (objData.metadata) {
+              obj.callsign = objData.metadata.callsign || obj.callsign;
+              obj.country = objData.metadata.country || obj.country;
+              obj.fuel = objData.metadata.fuel || obj.fuel;
+              obj.timeOnStation = objData.metadata.timeOnStation || obj.timeOnStation;
+              obj.loadout = objData.metadata.loadout || obj.loadout;
+              obj.status = objData.metadata.status || obj.status;
+              obj.mission = objData.metadata.mission || obj.mission;
+              obj.task = objData.metadata.task || obj.task;
+            }
+            
+            // Set flight plan
+            if (objData.flightPlan && objData.flightPlan.waypoints) {
+              obj.flightSpeed = objData.flightPlan.flightSpeed || 250;
+              objData.flightPlan.waypoints.forEach(wp => {
+                obj.addWaypoint(wp.longitude, wp.latitude, wp.altitude);
+                // Update last waypoint with speed and heading if provided
+                const lastWP = obj.waypoints[obj.waypoints.length - 1];
+                if (wp.speed) lastWP.speed = wp.speed;
+                if (wp.heading !== undefined) lastWP.heading = wp.heading;
+              });
+            }
+            
+            // Update entity position and orientation
+            obj.remove();
+            obj.createEntity();
+            
+            objects.push(obj);
+          });
+
+          // Redraw all flight paths after loading
+          objects.forEach(obj => {
+            if (obj.waypoints.length > 1) {
+              obj.updateFlightPath();
+            }
+          });
+
+          updateObjectCards();
+          alert(`Loaded ${data.objects.length} object(s) successfully`);
+
+        } catch (error) {
+          alert(`Error loading file: ${error.message}`);
+        }
+      };
+      reader.readAsText(file);
+      
+      // Reset file input
+      event.target.value = '';
+    }
+
     // Make functions global for onclick handlers
     window.updateObjectField = updateObjectField;
     window.focusObject = focusObject;
@@ -1767,6 +2285,15 @@
     window.testBankAngle = testBankAngle;
     window.testAltitude = testAltitude;
     window.testReset = testReset;
+    window.startAllFlights = startAllFlights;
+    window.stopAllFlights = stopAllFlights;
+    window.toggleCard = toggleCard;
+    window.toggleToolbar = toggleToolbar;
+    window.toggleCesiumToolbar = toggleCesiumToolbar;
+    window.saveObject = saveObject;
+    window.saveAllObjects = saveAllObjects;
+    window.triggerFileLoad = triggerFileLoad;
+    window.loadFlightData = loadFlightData;
 
   </script>
 
