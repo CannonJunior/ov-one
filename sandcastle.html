@@ -20,9 +20,10 @@
     }
 
     #cesiumContainer {
-      width: calc(100% - 350px);
+      width: calc(100% - var(--panel-width, 350px));
       height: 100vh;
       float: left;
+      transition: width 0.1s ease;
     }
 
     .cesium-viewer-toolbar {
@@ -44,12 +45,13 @@
     #add-object-toolbar {
       position: absolute;
       top: 10px;
-      right: 370px; /* 350px panel width + 20px gap */
+      right: calc(var(--panel-width, 350px) + 20px);
       background: rgba(42, 42, 42, 0.9);
       padding: 10px;
       border-radius: 5px;
       z-index: 100;
       box-shadow: 0 2px 10px rgba(0,0,0,0.3);
+      transition: right 0.1s ease;
     }
     
     #modelSelect {
@@ -69,7 +71,7 @@
     }
 
     #objects-panel {
-      width: 350px;
+      width: var(--panel-width, 350px);
       height: 100vh;
       float: right;
       background: #2a2a2a;
@@ -78,6 +80,33 @@
       box-sizing: border-box;
       overflow-y: auto;
       border-left: 1px solid #444;
+      transition: width 0.1s ease;
+      position: relative;
+    }
+
+    #panel-splitter {
+      position: absolute;
+      left: -3px;
+      top: 0;
+      width: 6px;
+      height: 100vh;
+      background: transparent;
+      cursor: col-resize;
+      z-index: 1000;
+      user-select: none;
+    }
+
+    #panel-splitter:hover {
+      background: rgba(74, 158, 255, 0.3);
+    }
+
+    #panel-splitter.dragging {
+      background: rgba(74, 158, 255, 0.5);
+    }
+
+    body.dragging {
+      cursor: col-resize;
+      user-select: none;
     }
 
     #objects-panel h3 {
@@ -107,7 +136,7 @@
 
     .object-info {
       display: grid;
-      grid-template-columns: 1fr 1fr;
+      grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
       gap: 8px;
       font-size: 12px;
     }
@@ -115,18 +144,28 @@
     .object-info div {
       display: flex;
       justify-content: space-between;
+      align-items: center;
       padding: 4px 0;
       border-bottom: 1px solid #444;
+      min-width: 0;
+      overflow: hidden;
     }
 
     .object-info label {
       color: #aaa;
       font-weight: 500;
+      flex-shrink: 0;
+      margin-right: 8px;
+      white-space: nowrap;
     }
 
     .object-info span {
       color: #fff;
       font-family: 'Courier New', monospace;
+      text-align: right;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
     }
 
     .editable {
@@ -136,7 +175,11 @@
       font-family: 'Courier New', monospace;
       font-size: 12px;
       text-align: right;
-      width: 80px;
+      min-width: 50px;
+      max-width: 100px;
+      flex-shrink: 1;
+      overflow: hidden;
+      text-overflow: ellipsis;
     }
 
     .editable:focus {
@@ -245,6 +288,90 @@
     .planning-mode h4 {
       color: #4a9a4a !important;
     }
+
+    .card-caret {
+      float: right;
+      cursor: pointer;
+      font-size: 12px;
+      transition: transform 0.3s ease;
+      user-select: none;
+      color: #aaa;
+    }
+
+    .card-caret:hover {
+      color: #fff;
+    }
+
+    .card-caret.collapsed {
+      transform: rotate(90deg);
+    }
+
+    .object-card-content {
+      transition: max-height 0.3s ease, opacity 0.3s ease;
+      overflow: hidden;
+    }
+
+    .object-card-content.collapsed {
+      max-height: 0;
+      opacity: 0;
+    }
+
+    /* Responsive design for smaller screens */
+    @media (max-width: 900px) {
+      :root {
+        --panel-width: 100%;
+      }
+
+      #cesiumContainer {
+        width: 100% !important;
+        height: 60vh;
+        float: none;
+      }
+
+      #objects-panel {
+        width: 100% !important;
+        height: 40vh;
+        float: none;
+        border-left: none;
+        border-top: 1px solid #444;
+        position: static;
+      }
+
+      #panel-splitter {
+        display: none;
+      }
+
+      #add-object-toolbar {
+        right: 20px !important;
+        top: calc(60vh + 10px);
+      }
+
+      .object-info {
+        grid-template-columns: 1fr;
+        gap: 4px;
+      }
+
+      .waypoint-item {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 4px;
+      }
+
+      .waypoint-item > div:first-child {
+        width: 100%;
+      }
+
+      .waypoint-item > div:first-child > div {
+        grid-template-columns: 1fr 1fr;
+        gap: 4px;
+      }
+    }
+
+    @media (min-width: 901px) {
+      :root {
+        --panel-width: 350px;
+      }
+    }
   </style>
 
 </head>
@@ -260,6 +387,7 @@
   </div>
 
   <div id="objects-panel">
+    <div id="panel-splitter"></div>
     <h3>Active Objects</h3>
     <div style="margin-bottom: 15px; padding: 10px; background: rgba(0,0,0,0.2); border-radius: 5px;">
       <div style="display: flex; gap: 10px; margin-bottom: 8px;">
@@ -270,6 +398,9 @@
     </div>
     <div id="object-cards-container"></div>
   </div>
+
+  <!-- Include aircraft configuration -->
+  <script src="config/aircraft-config.js"></script>
 
   <script type="module">
     // Multi-Object Tracking System
@@ -295,27 +426,94 @@
     let objects = [];
     let nextObjectId = 1;
 
-    // Object styling configuration
-    const ObjectStyleConfig = {
-      countries: {
-        "USA": {
-          fontColor: "#0000FF",
-          flightPathColor: "#0000FF"
-        },
-        "China": {
-          fontColor: "#FF0000", 
-          flightPathColor: "#FF0000"
+    // Panel resizing functionality
+    let isResizing = false;
+    let startX = 0;
+    let startPanelWidth = 350;
+
+    function initPanelResizer() {
+      const splitter = document.getElementById('panel-splitter');
+      const panel = document.getElementById('objects-panel');
+      const cesiumContainer = document.getElementById('cesiumContainer');
+      const body = document.body;
+
+      if (!splitter) return;
+
+      const startResize = (clientX) => {
+        isResizing = true;
+        startX = clientX;
+        startPanelWidth = parseInt(getComputedStyle(panel).width);
+
+        splitter.classList.add('dragging');
+        body.classList.add('dragging');
+      };
+
+      const doResize = (clientX) => {
+        if (!isResizing) return;
+
+        const deltaX = startX - clientX;
+        const newPanelWidth = Math.max(250, Math.min(window.innerWidth - 250, startPanelWidth + deltaX));
+
+        document.documentElement.style.setProperty('--panel-width', `${newPanelWidth}px`);
+      };
+
+      const stopResize = () => {
+        if (isResizing) {
+          isResizing = false;
+          splitter.classList.remove('dragging');
+          body.classList.remove('dragging');
         }
-      },
-      aircraftMapping: {
-        "J-20 Mighty Dragon": "China",
-        "F-35 Lightning II": "USA"
-      },
-      default: {
-        fontColor: "#4a9eff",
-        flightPathColor: "#00FFFF"
-      }
-    };
+      };
+
+      // Mouse events
+      splitter.addEventListener('mousedown', (e) => {
+        startResize(e.clientX);
+        e.preventDefault();
+      });
+
+      // Touch events for mobile
+      splitter.addEventListener('touchstart', (e) => {
+        startResize(e.touches[0].clientX);
+        e.preventDefault();
+      });
+
+      document.addEventListener('mousemove', (e) => {
+        doResize(e.clientX);
+        if (isResizing) e.preventDefault();
+      });
+
+      document.addEventListener('mouseup', () => {
+        stopResize();
+      });
+
+      // Touch events for document
+      document.addEventListener('touchmove', (e) => {
+        if (e.touches.length === 1) {
+          doResize(e.touches[0].clientX);
+          if (isResizing) e.preventDefault();
+        }
+      });
+
+      document.addEventListener('touchend', () => {
+        stopResize();
+      });
+
+      // Handle window resize
+      window.addEventListener('resize', () => {
+        const currentPanelWidth = parseInt(getComputedStyle(panel).width);
+        const maxPanelWidth = window.innerWidth - 250;
+
+        if (currentPanelWidth > maxPanelWidth) {
+          document.documentElement.style.setProperty('--panel-width', `${maxPanelWidth}px`);
+        }
+      });
+    }
+
+    // Initialize panel resizer
+    initPanelResizer();
+
+    // Use external configuration
+    const ObjectStyleConfig = window.AircraftConfig.objectStyleConfig;
 
     // Function to determine country based on aircraft type
     function getCountryFromAircraftType(aircraftType) {
@@ -333,16 +531,11 @@
     }
 
     // Platform-specific turn rates (degrees per second)
-    const PLATFORM_TURN_RATES = {
-      'Fighter': 20,
-      'Bomber': 8,
-      'Transport': 5,
-      'UAV': 15
-    };
+    const PLATFORM_TURN_RATES = window.AircraftConfig.platformTurnRates;
 
     // Object data structure
     class TrackedObject {
-      constructor(type, modelUrl, platform, initialHeading = null) {
+      constructor(type, modelUrl, platform, initialHeading = null, callsignBase = null, increment = null) {
         this.id = nextObjectId++;
         this.type = type;
         this.modelUrl = modelUrl;
@@ -360,7 +553,13 @@
         
         // Editable metadata - determine country from aircraft type
         this.country = getCountryFromAircraftType(type);
-        this.callsign = `${type}${String(this.id).padStart(2, '0')}`;
+        
+        // Generate callsign in format: callsign-increment (e.g., "Dragon-00")
+        this.callsignBase = callsignBase || "Unknown";
+        this.increment = increment || "00";
+        this.callsign = `${this.callsignBase}-${this.increment}`;
+        this.aircraftType = type;
+        
         this.fuel = '75%';
         this.timeOnStation = '2h 15m';
         this.loadout = 'Standard';
@@ -1106,11 +1305,17 @@
       return `
         <div class="object-card" id="card_${obj.id}" data-object-id="${obj.id}">
           <h4 style="color: ${countryStyle.fontColor};">
-            ${obj.callsign} (${obj.type})
+            ${obj.callsign}
             <span style="font-size: 12px; color: #aaa;">#${obj.id}</span>
+            <span class="card-caret" onclick="toggleCardCollapse(${obj.id})">▼</span>
           </h4>
           
-          <div class="object-info">
+          <div class="object-card-content" id="content_${obj.id}">
+            <div class="object-info">
+            <div>
+              <label>Aircraft Type:</label>
+              <span>${obj.aircraftType}</span>
+            </div>
             <div>
               <label>Country:</label>
               <input class="editable" value="${obj.country}" onchange="updateObjectField(${obj.id}, 'country', this.value)">
@@ -1252,12 +1457,24 @@
               </div>
             ` : ''}
           </div>
+          </div>
         </div>
       `;
     }
 
     // Object management functions
     function addObject(type, modelUrl, platform) {
+      // Find aircraft config for this type
+      const aircraftConfig = aircraftTypes.find(ac => ac.text === type);
+      const callsignBase = aircraftConfig ? aircraftConfig.callsign : "Unknown";
+      
+      // Generate unique callsign with increment
+      if (!window.AircraftConfig.callsignCounters[callsignBase]) {
+        window.AircraftConfig.callsignCounters[callsignBase] = 0;
+      }
+      const increment = String(window.AircraftConfig.callsignCounters[callsignBase]).padStart(2, '0');
+      window.AircraftConfig.callsignCounters[callsignBase]++;
+      
       // Prompt for initial heading
       const headingInput = prompt(`Enter initial heading for ${type} (0-360 degrees):`, Math.floor(Math.random() * 360));
       let initialHeading = null;
@@ -1269,7 +1486,7 @@
         }
       }
       
-      const obj = new TrackedObject(type, modelUrl, platform, initialHeading);
+      const obj = new TrackedObject(type, modelUrl, platform, initialHeading, callsignBase, increment);
       objects.push(obj);
       updateObjectCards();
     }
@@ -1320,9 +1537,60 @@
       }
     }
 
+    function updateCallsign(id, newCallsignBase, newIncrement) {
+      const obj = objects.find(obj => obj.id === id);
+      if (obj) {
+        obj.callsignBase = newCallsignBase;
+        obj.increment = newIncrement;
+        obj.callsign = `${newCallsignBase}-${newIncrement}`;
+        if (obj.entity) {
+          obj.entity.name = obj.callsign;
+        }
+        // Update the card display
+        updateObjectCards();
+      }
+    }
+
+    function updateCallsignBase(id, newCallsignBase) {
+      const obj = objects.find(obj => obj.id === id);
+      if (obj) {
+        updateCallsign(id, newCallsignBase, obj.increment);
+      }
+    }
+
+    function updateCallsignIncrement(id, newIncrement) {
+      const obj = objects.find(obj => obj.id === id);
+      if (obj) {
+        updateCallsign(id, obj.callsignBase, newIncrement);
+      }
+    }
+
     function updateObjectCards() {
       const container = document.getElementById('object-cards-container');
       container.innerHTML = objects.map(obj => createObjectCard(obj)).join('');
+    }
+
+    // Card collapse/expand functionality
+    function toggleCardCollapse(id) {
+      const card = document.getElementById(`card_${id}`);
+      const content = document.getElementById(`content_${id}`);
+      const caret = card.querySelector('.card-caret');
+      
+      if (content && caret) {
+        const isCollapsed = content.classList.contains('collapsed');
+        
+        if (isCollapsed) {
+          // Expand the card
+          content.classList.remove('collapsed');
+          caret.classList.remove('collapsed');
+          caret.textContent = '▼';
+        } else {
+          // Collapse the card
+          content.classList.add('collapsed');
+          caret.classList.add('collapsed');
+          caret.textContent = '▲';
+        }
+      }
     }
 
     // Update only dynamic data without regenerating HTML (prevents input field resets)
@@ -1405,23 +1673,7 @@
     setInterval(adjustUpdateRate, 2000);
 
     // Aircraft types configuration
-    const aircraftTypes = [
-      {
-        text: "F-35 Lightning II",
-        platform: "Fighter",
-        modelUrl: "assets/f-35b_lightning_ii.glb"
-      },
-      {
-        text: "J-20 Mighty Dragon",
-        platform: "Fighter", 
-        modelUrl: "assets/chengdu_j-20_fighter_v2.glb"
-      },
-      {
-        text: "Test Box",
-        platform: "Test",
-        modelUrl: "../SampleData/models/BoxInstanced/BoxInstanced.gltf"
-      }
-    ];
+    const aircraftTypes = window.AircraftConfig.aircraftTypes;
 
     // Setup dropdown
     const modelSelect = document.getElementById('modelSelect');
@@ -1625,19 +1877,19 @@
       const input = document.createElement('input');
       input.type = 'file';
       input.accept = '.json';
-      
+
       input.onchange = function(event) {
         const file = event.target.files[0];
         if (!file) return;
-        
+
         const reader = new FileReader();
         reader.onload = function(e) {
           try {
             const data = JSON.parse(e.target.result);
-            
+
             // Handle both single flight plan and multiple flight plans
             let flightPlansToLoad = [];
-            
+
             if (data.objects && Array.isArray(data.objects)) {
               // Multiple flight plans format
               flightPlansToLoad = data.objects;
@@ -1648,69 +1900,82 @@
               alert('Invalid flight plan format!');
               return;
             }
-            
+
+            // Clear all existing objects and their flight plans
+            objects.forEach(obj => obj.remove());
+            objects = [];
+
             let loadedCount = 0;
-            
+
             flightPlansToLoad.forEach(planData => {
-              // Try to find existing object by callsign first
-              let targetObj = objects.find(obj => obj.callsign === planData.callsign);
-              
-              if (!targetObj && objects.length > 0) {
-                // If no matching callsign, ask user to select an object
-                const objectList = objects.map((obj, index) => `${index}: ${obj.callsign} (${obj.type})`).join('\n');
-                const selection = prompt(
-                  `Load flight plan for "${planData.callsign}" onto which object?\n\n${objectList}\n\nEnter object number (or cancel):`,
-                  '0'
-                );
-                
-                if (selection !== null && !isNaN(selection)) {
-                  const objIndex = parseInt(selection);
-                  if (objIndex >= 0 && objIndex < objects.length) {
-                    targetObj = objects[objIndex];
-                  }
-                }
+              // Find matching aircraft type from config
+              const aircraftConfig = window.AircraftConfig.aircraftTypes.find(ac =>
+                ac.text === planData.platform || // Try platform first
+                ac.callsign === planData.callsign.split('-')[0] || // Try callsign base
+                ac.text.includes(planData.callsign.split('-')[0]) // Try partial match
+              );
+
+              if (!aircraftConfig) {
+                console.warn(`No matching aircraft type found for ${planData.callsign}, using default`);
+                return;
               }
-              
-              if (targetObj) {
-                // Clear existing waypoints and flight path
-                targetObj.clearFlightPlan();
-                
-                // Load flight speed if provided
-                if (planData.flightSpeed) {
-                  targetObj.flightSpeed = planData.flightSpeed;
-                }
-                
-                // Load waypoints
-                planData.flightPlan.waypoints.forEach(wp => {
-                  targetObj.addWaypoint(wp.longitude, wp.latitude, wp.altitude);
-                  // Update last waypoint with speed and heading if provided
-                  const lastWP = targetObj.waypoints[targetObj.waypoints.length - 1];
-                  if (wp.speed) lastWP.speed = wp.speed;
-                  if (wp.heading !== undefined) lastWP.heading = wp.heading;
-                });
-                
-                // Update flight path
-                if (targetObj.waypoints.length > 1) {
-                  targetObj.updateFlightPath();
-                }
-                
-                loadedCount++;
-                console.log(`Loaded flight plan for ${targetObj.callsign}: ${targetObj.waypoints.length} waypoints`);
+
+              // Extract callsign base and increment from the loaded callsign
+              const callsignParts = planData.callsign.split('-');
+              const callsignBase = callsignParts[0] || aircraftConfig.callsign;
+              const increment = callsignParts[1] || "00";
+
+              // Create new object
+              const newObj = new TrackedObject(
+                aircraftConfig.text,
+                aircraftConfig.modelUrl,
+                aircraftConfig.platform,
+                null, // No initial heading override
+                callsignBase,
+                increment
+              );
+
+              // Set country if provided in flight plan
+              if (planData.country) {
+                newObj.country = planData.country;
               }
+
+              // Load flight speed if provided
+              if (planData.flightSpeed) {
+                newObj.flightSpeed = planData.flightSpeed;
+              }
+
+              // Load waypoints
+              planData.flightPlan.waypoints.forEach(wp => {
+                newObj.addWaypoint(wp.longitude, wp.latitude, wp.altitude);
+                // Update last waypoint with speed and heading if provided
+                const lastWP = newObj.waypoints[newObj.waypoints.length - 1];
+                if (wp.speed) lastWP.speed = wp.speed;
+                if (wp.heading !== undefined) lastWP.heading = wp.heading;
+              });
+
+              // Update flight path
+              if (newObj.waypoints.length > 1) {
+                newObj.updateFlightPath();
+              }
+
+              objects.push(newObj);
+              loadedCount++;
+              console.log(`Created new object ${newObj.callsign}: ${newObj.waypoints.length} waypoints`);
             });
-            
+
             updateObjectCards();
-            alert(`Loaded ${loadedCount} flight plans`);
-            
+            alert(`Cleared existing objects and loaded ${loadedCount} new objects with flight plans`);
+
           } catch (error) {
             alert('Error loading flight plans: ' + error.message);
             console.error('Flight plans load error:', error);
           }
         };
-        
+
         reader.readAsText(file);
       };
-      
+
       input.click();
     }
     
@@ -1923,6 +2188,9 @@
 
     // Make functions global for onclick handlers
     window.updateObjectField = updateObjectField;
+    window.updateCallsign = updateCallsign;
+    window.updateCallsignBase = updateCallsignBase;
+    window.updateCallsignIncrement = updateCallsignIncrement;
     window.focusObject = focusObject;
     window.trackObject = trackObject;
     window.duplicateObject = duplicateObject;
@@ -1937,6 +2205,7 @@
     window.updateWaypointAltitude = updateWaypointAltitude;
     window.updateWaypointSpeed = updateWaypointSpeed;
     window.updateWaypointHeading = updateWaypointHeading;
+    window.toggleCardCollapse = toggleCardCollapse;
     window.saveAllFlightPlans = saveAllFlightPlans;
     window.loadFlightPlans = loadFlightPlans;
     window.saveFlightPlan = saveFlightPlan;
