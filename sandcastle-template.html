@@ -25,10 +25,26 @@
       float: left;
     }
 
+    .cesium-viewer-toolbar {
+      position: absolute;
+      top: 10px;
+      left: 40px; /* Move right to make room for toggle */
+      z-index: 100;
+      transition: transform 0.3s ease;
+    }
+
+    .cesium-viewer-toolbar.hidden {
+      transform: translateX(-100%);
+    }
+
+    .cesium-viewer-bottom {
+      display: none !important;
+    }
+
     #add-object-toolbar {
       position: absolute;
       top: 10px;
-      left: 10px;
+      right: 370px; /* 350px panel width + 20px gap */
       background: rgba(42, 42, 42, 0.9);
       padding: 10px;
       border-radius: 5px;
@@ -245,6 +261,13 @@
 
   <div id="objects-panel">
     <h3>Active Objects</h3>
+    <div style="margin-bottom: 15px; padding: 10px; background: rgba(0,0,0,0.2); border-radius: 5px;">
+      <div style="display: flex; gap: 10px; margin-bottom: 8px;">
+        <button class="btn" style="background: #28a745;" onclick="saveAllFlightPlans()">Save All Plans</button>
+        <button class="btn" style="background: #17a2b8;" onclick="loadFlightPlans()">Load Plans</button>
+      </div>
+      <div style="font-size: 11px; color: #aaa;">Save/load flight plans for all objects with waypoints</div>
+    </div>
     <div id="object-cards-container"></div>
   </div>
 
@@ -256,6 +279,7 @@
     const viewer = new Cesium.Viewer("cesiumContainer", {
       shadows: true,
       shouldAnimate: true,
+      timeline: true,
     });
 
     // Fly to San Francisco startup view
@@ -502,7 +526,7 @@
         this.waypoints.push({
           longitude: longitude,
           latitude: latitude,
-          altitude: altitude || 10000,
+          altitude: altitude || 0, // Default altitude set to 0
           speed: this.flightSpeed || 250, // Default speed in knots
           heading: undefined, // Auto-calculate heading
           id: Date.now()
@@ -681,24 +705,78 @@
           while (headingChange < -Math.PI) headingChange += 2 * Math.PI;
           
           if (Math.abs(headingChange) > 0.01) {
-            // Calculate turn duration based on platform turn rate
-            const turnDuration = Math.abs(Cesium.Math.toDegrees(headingChange)) / this.turnRate; // seconds
+            const headingChangeDegrees = Math.abs(Cesium.Math.toDegrees(headingChange));
             
-            // Calculate lead time needed to complete turn by waypoint
-            const leadTime = turnDuration * 0.5; // Start turn halfway before waypoint arrival
-            const turnWPTime = flightData[i].time;
-            const leadTurnStartTime = turnWPTime - (leadTime * 1000); // Convert to milliseconds
-            
-            leadTurnData.push({
-              waypointIndex: i,
-              leadTurnStartTime: leadTurnStartTime,
-              turnDuration: turnDuration * 1000, // Convert to milliseconds
-              headingChange: headingChange,
-              inboundCourse: inboundCourse,
-              outboundCourse: outboundCourse,
-              turnWaypoint: turnWP,
-              nextWaypoint: outboundWP
-            });
+            // For turns ≥90°, split into two steps to prevent abrupt heading changes
+            if (headingChangeDegrees >= 90) {
+              // Step 1: Turn 89° toward target
+              const firstTurnDegrees = 89;
+              const firstTurnRadians = Math.sign(headingChange) * Cesium.Math.toRadians(firstTurnDegrees);
+              const firstTurnDuration = firstTurnDegrees / this.turnRate; // seconds
+              
+              // Step 2: Complete remaining turn
+              const remainingTurnDegrees = headingChangeDegrees - firstTurnDegrees;
+              const remainingTurnRadians = Math.sign(headingChange) * Cesium.Math.toRadians(remainingTurnDegrees);
+              const remainingTurnDuration = remainingTurnDegrees / this.turnRate; // seconds
+              
+              const totalTurnDuration = firstTurnDuration + remainingTurnDuration;
+              
+              // Calculate intermediate heading after first 89° turn
+              const intermediateHeading = inboundCourse + firstTurnRadians;
+              
+              // Calculate lead time for the entire two-step turn
+              const leadTime = totalTurnDuration * 0.5;
+              const turnWPTime = flightData[i].time;
+              const leadTurnStartTime = turnWPTime - (leadTime * 1000);
+              
+              // First turn phase
+              leadTurnData.push({
+                waypointIndex: i,
+                leadTurnStartTime: leadTurnStartTime,
+                turnDuration: firstTurnDuration * 1000, // Convert to milliseconds
+                headingChange: firstTurnRadians,
+                inboundCourse: inboundCourse,
+                outboundCourse: intermediateHeading,
+                turnWaypoint: turnWP,
+                nextWaypoint: outboundWP,
+                isFirstPhase: true,
+                totalTurnPhases: 2
+              });
+              
+              // Second turn phase (starts immediately after first phase)
+              leadTurnData.push({
+                waypointIndex: i,
+                leadTurnStartTime: leadTurnStartTime + (firstTurnDuration * 1000),
+                turnDuration: remainingTurnDuration * 1000, // Convert to milliseconds
+                headingChange: remainingTurnRadians,
+                inboundCourse: intermediateHeading,
+                outboundCourse: outboundCourse,
+                turnWaypoint: turnWP,
+                nextWaypoint: outboundWP,
+                isSecondPhase: true,
+                totalTurnPhases: 2
+              });
+              
+            } else {
+              // Single-step turn for turns <90°
+              const turnDuration = headingChangeDegrees / this.turnRate; // seconds
+              
+              // Calculate lead time needed to complete turn by waypoint
+              const leadTime = turnDuration * 0.5; // Start turn halfway before waypoint arrival
+              const turnWPTime = flightData[i].time;
+              const leadTurnStartTime = turnWPTime - (leadTime * 1000); // Convert to milliseconds
+              
+              leadTurnData.push({
+                waypointIndex: i,
+                leadTurnStartTime: leadTurnStartTime,
+                turnDuration: turnDuration * 1000, // Convert to milliseconds
+                headingChange: headingChange,
+                inboundCourse: inboundCourse,
+                outboundCourse: outboundCourse,
+                turnWaypoint: turnWP,
+                nextWaypoint: outboundWP
+              });
+            }
           }
         }
 
@@ -1466,7 +1544,7 @@
         const waypoint = obj.waypoints.find(wp => wp.id === waypointId);
         if (waypoint) {
           // Convert feet to meters
-          waypoint.altitude = (parseFloat(newAltitudeFeet) || 10000) / 3.28084;
+          waypoint.altitude = (parseFloat(newAltitudeFeet) || 0) / 3.28084;
           obj.updateFlightPath();
         }
       }
@@ -1496,6 +1574,243 @@
           obj.updateFlightPath();
         }
       }
+    }
+
+    // Save and Load Flight Plan Functions
+    function saveAllFlightPlans() {
+      const objectsWithPlans = objects.filter(obj => obj.waypoints && obj.waypoints.length > 0);
+      
+      if (objectsWithPlans.length === 0) {
+        alert('No flight plans to save!');
+        return;
+      }
+      
+      const allFlightPlans = {
+        version: "1.0",
+        timestamp: new Date().toISOString(),
+        objects: objectsWithPlans.map(obj => ({
+          callsign: obj.callsign,
+          country: obj.country,
+          platform: obj.platform,
+          flightSpeed: obj.flightSpeed,
+          flightPlan: {
+            waypoints: obj.waypoints.map(wp => ({
+              longitude: wp.longitude,
+              latitude: wp.latitude,
+              altitude: wp.altitude,
+              speed: wp.speed,
+              heading: wp.heading
+            }))
+          }
+        }))
+      };
+      
+      const jsonString = JSON.stringify(allFlightPlans, null, 2);
+      const blob = new Blob([jsonString], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `all_flight_plans_${Date.now()}.json`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      
+      console.log(`Saved ${objectsWithPlans.length} flight plans`);
+      alert(`Saved ${objectsWithPlans.length} flight plans`);
+    }
+    
+    function loadFlightPlans() {
+      const input = document.createElement('input');
+      input.type = 'file';
+      input.accept = '.json';
+      
+      input.onchange = function(event) {
+        const file = event.target.files[0];
+        if (!file) return;
+        
+        const reader = new FileReader();
+        reader.onload = function(e) {
+          try {
+            const data = JSON.parse(e.target.result);
+            
+            // Handle both single flight plan and multiple flight plans
+            let flightPlansToLoad = [];
+            
+            if (data.objects && Array.isArray(data.objects)) {
+              // Multiple flight plans format
+              flightPlansToLoad = data.objects;
+            } else if (data.flightPlan && data.flightPlan.waypoints) {
+              // Single flight plan format (backward compatibility)
+              flightPlansToLoad = [data];
+            } else {
+              alert('Invalid flight plan format!');
+              return;
+            }
+            
+            let loadedCount = 0;
+            
+            flightPlansToLoad.forEach(planData => {
+              // Try to find existing object by callsign first
+              let targetObj = objects.find(obj => obj.callsign === planData.callsign);
+              
+              if (!targetObj && objects.length > 0) {
+                // If no matching callsign, ask user to select an object
+                const objectList = objects.map((obj, index) => `${index}: ${obj.callsign} (${obj.type})`).join('\n');
+                const selection = prompt(
+                  `Load flight plan for "${planData.callsign}" onto which object?\n\n${objectList}\n\nEnter object number (or cancel):`,
+                  '0'
+                );
+                
+                if (selection !== null && !isNaN(selection)) {
+                  const objIndex = parseInt(selection);
+                  if (objIndex >= 0 && objIndex < objects.length) {
+                    targetObj = objects[objIndex];
+                  }
+                }
+              }
+              
+              if (targetObj) {
+                // Clear existing waypoints and flight path
+                targetObj.clearFlightPlan();
+                
+                // Load flight speed if provided
+                if (planData.flightSpeed) {
+                  targetObj.flightSpeed = planData.flightSpeed;
+                }
+                
+                // Load waypoints
+                planData.flightPlan.waypoints.forEach(wp => {
+                  targetObj.addWaypoint(wp.longitude, wp.latitude, wp.altitude);
+                  // Update last waypoint with speed and heading if provided
+                  const lastWP = targetObj.waypoints[targetObj.waypoints.length - 1];
+                  if (wp.speed) lastWP.speed = wp.speed;
+                  if (wp.heading !== undefined) lastWP.heading = wp.heading;
+                });
+                
+                // Update flight path
+                if (targetObj.waypoints.length > 1) {
+                  targetObj.updateFlightPath();
+                }
+                
+                loadedCount++;
+                console.log(`Loaded flight plan for ${targetObj.callsign}: ${targetObj.waypoints.length} waypoints`);
+              }
+            });
+            
+            updateObjectCards();
+            alert(`Loaded ${loadedCount} flight plans`);
+            
+          } catch (error) {
+            alert('Error loading flight plans: ' + error.message);
+            console.error('Flight plans load error:', error);
+          }
+        };
+        
+        reader.readAsText(file);
+      };
+      
+      input.click();
+    }
+    
+    // Individual flight plan functions (kept for backward compatibility)
+    function saveFlightPlan(id) {
+      const obj = objects.find(obj => obj.id === id);
+      if (!obj || obj.waypoints.length === 0) {
+        alert('No flight plan to save!');
+        return;
+      }
+      
+      const flightPlanData = {
+        version: "1.0",
+        callsign: obj.callsign,
+        country: obj.country,
+        platform: obj.platform,
+        flightSpeed: obj.flightSpeed,
+        flightPlan: {
+          waypoints: obj.waypoints.map(wp => ({
+            longitude: wp.longitude,
+            latitude: wp.latitude,
+            altitude: wp.altitude,
+            speed: wp.speed,
+            heading: wp.heading
+          }))
+        }
+      };
+      
+      const jsonString = JSON.stringify(flightPlanData, null, 2);
+      const blob = new Blob([jsonString], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `flight_plan_${obj.callsign}_${Date.now()}.json`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      
+      console.log(`Saved flight plan for ${obj.callsign}`);
+    }
+    
+    function loadFlightPlan(id) {
+      const obj = objects.find(obj => obj.id === id);
+      if (!obj) return;
+      
+      const input = document.createElement('input');
+      input.type = 'file';
+      input.accept = '.json';
+      
+      input.onchange = function(event) {
+        const file = event.target.files[0];
+        if (!file) return;
+        
+        const reader = new FileReader();
+        reader.onload = function(e) {
+          try {
+            const flightPlanData = JSON.parse(e.target.result);
+            
+            if (!flightPlanData.flightPlan || !flightPlanData.flightPlan.waypoints) {
+              alert('Invalid flight plan format!');
+              return;
+            }
+            
+            // Clear existing waypoints and flight path
+            obj.clearFlightPlan();
+            
+            // Load flight speed if provided
+            if (flightPlanData.flightSpeed) {
+              obj.flightSpeed = flightPlanData.flightSpeed;
+            }
+            
+            // Load waypoints
+            flightPlanData.flightPlan.waypoints.forEach(wp => {
+              obj.addWaypoint(wp.longitude, wp.latitude, wp.altitude);
+              // Update last waypoint with speed and heading if provided
+              const lastWP = obj.waypoints[obj.waypoints.length - 1];
+              if (wp.speed) lastWP.speed = wp.speed;
+              if (wp.heading !== undefined) lastWP.heading = wp.heading;
+            });
+            
+            // Update flight path
+            if (obj.waypoints.length > 1) {
+              obj.updateFlightPath();
+            }
+            
+            updateObjectCards();
+            console.log(`Loaded flight plan for ${obj.callsign}: ${obj.waypoints.length} waypoints`);
+            
+          } catch (error) {
+            alert('Error loading flight plan: ' + error.message);
+            console.error('Flight plan load error:', error);
+          }
+        };
+        
+        reader.readAsText(file);
+      };
+      
+      input.click();
     }
 
     // DEBUG FUNCTIONS for testing orientation and position changes
@@ -1599,7 +1914,7 @@
         const cartographic = Cesium.Cartographic.fromCartesian(pickedPosition);
         const longitude = Cesium.Math.toDegrees(cartographic.longitude);
         const latitude = Cesium.Math.toDegrees(cartographic.latitude);
-        const altitude = 10000; // Default altitude
+        const altitude = 0; // Default altitude set to 0
 
         currentPlanningObject.addWaypoint(longitude, latitude, altitude);
         updateObjectCards();
@@ -1622,6 +1937,10 @@
     window.updateWaypointAltitude = updateWaypointAltitude;
     window.updateWaypointSpeed = updateWaypointSpeed;
     window.updateWaypointHeading = updateWaypointHeading;
+    window.saveAllFlightPlans = saveAllFlightPlans;
+    window.loadFlightPlans = loadFlightPlans;
+    window.saveFlightPlan = saveFlightPlan;
+    window.loadFlightPlan = loadFlightPlan;
     window.testBankAngle = testBankAngle;
     window.testAltitude = testAltitude;
     window.testReset = testReset;
