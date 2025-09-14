@@ -938,12 +938,8 @@
             }
           }, false),
           orientation: new Cesium.CallbackProperty(() => {
-            // Use cylinder orientation from config
+            // Orient cylinder to match aircraft's current heading - simplified approach
             try {
-              const heading = Cesium.Math.toRadians(this.config.cylinderHeading || 0);
-              const pitch = Cesium.Math.toRadians(this.config.cylinderPitch || 0);
-              const roll = Cesium.Math.toRadians(this.config.cylinderRoll || 0);
-
               if (!this.parentObject?.entity?.position) {
                 return Cesium.Quaternion.IDENTITY;
               }
@@ -953,10 +949,27 @@
                 return Cesium.Quaternion.IDENTITY;
               }
 
-              return Cesium.Transforms.headingPitchRollQuaternion(
-                aircraftPos,
-                new Cesium.HeadingPitchRoll(heading, pitch, roll)
-              );
+              // Use aircraft's heading property directly (much simpler and more reliable)
+              const aircraftHeading = this.parentObject.heading || 0;
+              const aircraftPitch = this.parentObject.pitch || 0;
+              const aircraftRoll = this.parentObject.roll || 0;
+
+              // Apply config offsets
+              const headingOffset = this.config.cylinderHeading || 0;
+              const pitchOffset = this.config.cylinderPitch || 0;
+              const rollOffset = this.config.cylinderRoll || 0;
+
+              const finalHeading = aircraftHeading + headingOffset;
+              const finalPitch = aircraftPitch + pitchOffset;
+              const finalRoll = aircraftRoll + rollOffset;
+
+              // Convert to Cesium's coordinate system (Cesium heading: 0° = East, aircraft: 0° = North)
+              const cesiumHeading = Cesium.Math.toRadians(finalHeading - 90);
+              const cesiumPitch = Cesium.Math.toRadians(finalPitch);
+              const cesiumRoll = Cesium.Math.toRadians(finalRoll);
+
+              const hpr = new Cesium.HeadingPitchRoll(cesiumHeading, cesiumPitch, cesiumRoll);
+              return Cesium.Transforms.headingPitchRollQuaternion(aircraftPos, hpr);
             } catch (e) {
               console.warn('Radar orientation callback error:', e);
               return Cesium.Quaternion.IDENTITY;
@@ -2526,6 +2539,9 @@
                 <div style="color: #4a9eff;">
                   Cylinder Position: <span id="cylinder-pos-${obj.id}">Calculating...</span>
                 </div>
+                <div style="color: #ffaa44;">
+                  Cylinder Orientation: <span id="cylinder-orient-${obj.id}">Calculating...</span>
+                </div>
               </div>
             ` : ''}
 
@@ -2691,10 +2707,49 @@
             console.warn('Error getting cylinder position:', e);
           }
 
-          // Update display element
+          // CYLINDER ORIENTATION: Display the values used to create orientation (avoid quaternion conversion)
+          let cylinderHeading = 0, cylinderPitch = 0, cylinderRoll = 0;
+          let debugInfo = "";
+          try {
+            const sensor = obj.radarSystem.getSensor('primary');
+            if (sensor && sensor.radarCone) {
+              // Get the aircraft's current heading that the radar uses
+              const aircraftHeading = obj.heading || 0;
+              const aircraftPitch = obj.pitch || 0;
+              const aircraftRoll = obj.roll || 0;
+
+              // Apply config offsets (same logic as in radar orientation callback)
+              const headingOffset = sensor.config.cylinderHeading || 0;
+              const pitchOffset = sensor.config.cylinderPitch || 0;
+              const rollOffset = sensor.config.cylinderRoll || 0;
+
+              const finalHeading = aircraftHeading + headingOffset;
+              const finalPitch = aircraftPitch + pitchOffset;
+              const finalRoll = aircraftRoll + rollOffset;
+
+              // These are the values being used to create the cylinder orientation
+              cylinderHeading = finalHeading;
+              cylinderPitch = finalPitch;
+              cylinderRoll = finalRoll;
+
+              debugInfo = `AH:${aircraftHeading.toFixed(1)}° OF:${headingOffset.toFixed(1)}°`;
+            } else {
+              debugInfo = `SENSOR:${!!sensor} CONE:${!!(sensor?.radarCone)}`;
+            }
+          } catch (e) {
+            console.warn('Error getting cylinder orientation:', e);
+            debugInfo = `ERROR:${e.message}`;
+          }
+
+          // Update display elements
           const cylinderPosElement = document.getElementById(`cylinder-pos-${obj.id}`);
           if (cylinderPosElement) {
             cylinderPosElement.textContent = `x=${cylinderLon.toFixed(6)} y=${cylinderLat.toFixed(6)} z=${cylinderAlt.toFixed(0)}m`;
+          }
+
+          const cylinderOrientElement = document.getElementById(`cylinder-orient-${obj.id}`);
+          if (cylinderOrientElement) {
+            cylinderOrientElement.textContent = `H=${cylinderHeading.toFixed(1)}° P=${cylinderPitch.toFixed(1)}° R=${cylinderRoll.toFixed(1)}° (${debugInfo})`;
           }
           } catch (objError) {
             console.warn('Error updating radar debug for object:', obj?.id, objError);
