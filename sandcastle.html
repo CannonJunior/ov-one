@@ -533,6 +533,919 @@
     // Platform-specific turn rates (degrees per second)
     const PLATFORM_TURN_RATES = window.AircraftConfig.platformTurnRates;
 
+    // Global radar management
+    let nextTrackId = 1;
+    let radarManager = null;
+
+    // Message Bus System for event handling
+    class MessageBus {
+      constructor() {
+        this.eventQueue = [];
+        this.subscribers = new Map();
+        this.eventHistory = [];
+        this.maxHistorySize = 1000;
+
+        // Event types configuration
+        this.eventTypes = {
+          SENSOR: ['target_detected', 'track_lost', 'emission_state_change', 'radar_mode_change'],
+          NAVIGATION: ['waypoint_arrival', 'course_change', 'altitude_change', 'speed_change'],
+          TACTICAL: ['weapons_launch', 'missile_impact', 'jamming_detected', 'threat_warning'],
+          SYSTEM: ['equipment_failure', 'fuel_warning', 'mission_update', 'communication']
+        };
+
+        // Priority levels
+        this.priorities = {
+          'CRITICAL': 1,
+          'HIGH': 2,
+          'MEDIUM': 3,
+          'LOW': 4
+        };
+      }
+
+      publishMessage(messageData) {
+        const message = {
+          id: Date.now() + Math.random(),
+          timestamp: new Date(),
+          category: messageData.category || 'SYSTEM',
+          type: messageData.type || 'general',
+          priority: messageData.priority || 'MEDIUM',
+          source: messageData.source || 'System',
+          data: messageData.data || {},
+          description: messageData.description || 'No description provided'
+        };
+
+        // Add to event queue
+        this.eventQueue.push(message);
+        this.eventQueue.sort((a, b) => this.priorities[a.priority] - this.priorities[b.priority]);
+
+        // Add to history
+        this.eventHistory.push(message);
+        if (this.eventHistory.length > this.maxHistorySize) {
+          this.eventHistory.shift();
+        }
+
+        // Notify subscribers
+        const categorySubscribers = this.subscribers.get(message.category) || [];
+        const typeKey = `${message.category}.${message.type}`;
+        const typeSubscribers = this.subscribers.get(typeKey) || [];
+        const allSubscribers = this.subscribers.get('ALL') || [];
+
+        [...categorySubscribers, ...typeSubscribers, ...allSubscribers].forEach(callback => {
+          try {
+            callback(message);
+          } catch (error) {
+            console.error('Error in message subscriber:', error);
+          }
+        });
+
+        // Console logging for debugging
+        const prioritySymbol = {
+          'CRITICAL': '🚨',
+          'HIGH': '⚠️',
+          'MEDIUM': 'ℹ️',
+          'LOW': '📝'
+        }[message.priority] || 'ℹ️';
+
+        console.log(`${prioritySymbol} [${message.category}] ${message.description}`, message.data);
+
+        // Update UI if message panel exists
+        this.updateMessagePanel(message);
+
+        return message;
+      }
+
+      subscribe(eventType, callback) {
+        if (!this.subscribers.has(eventType)) {
+          this.subscribers.set(eventType, []);
+        }
+        this.subscribers.get(eventType).push(callback);
+
+        // Return unsubscribe function
+        return () => {
+          const callbacks = this.subscribers.get(eventType) || [];
+          const index = callbacks.indexOf(callback);
+          if (index > -1) {
+            callbacks.splice(index, 1);
+          }
+        };
+      }
+
+      getRecentMessages(count = 10, category = null) {
+        let messages = [...this.eventHistory];
+
+        if (category) {
+          messages = messages.filter(msg => msg.category === category);
+        }
+
+        return messages.slice(-count);
+      }
+
+      clearHistory() {
+        this.eventHistory = [];
+        this.eventQueue = [];
+      }
+
+      updateMessagePanel(message) {
+        // This will be implemented when we create the message panel UI
+        if (typeof updateMessagePanelUI === 'function') {
+          updateMessagePanelUI(message);
+        }
+      }
+
+      // LLM Interface preparation methods
+      getContextualMessages(timeWindow = 300000) { // 5 minutes
+        const cutoffTime = Date.now() - timeWindow;
+        return this.eventHistory.filter(msg => msg.timestamp.getTime() > cutoffTime);
+      }
+
+      generateTacticalSummary() {
+        const recentMessages = this.getContextualMessages();
+        const summary = {
+          detections: recentMessages.filter(msg => msg.type === 'target_detected').length,
+          trackLosses: recentMessages.filter(msg => msg.type === 'track_lost').length,
+          navigationEvents: recentMessages.filter(msg => msg.category === 'NAVIGATION').length,
+          tacticalEvents: recentMessages.filter(msg => msg.category === 'TACTICAL').length,
+          criticalEvents: recentMessages.filter(msg => msg.priority === 'CRITICAL').length
+        };
+
+        return {
+          summary: summary,
+          messages: recentMessages,
+          timeWindow: timeWindow / 1000 / 60 // minutes
+        };
+      }
+
+      formatMessageForLLM(message) {
+        return {
+          time: message.timestamp.toISOString(),
+          category: message.category,
+          type: message.type,
+          priority: message.priority,
+          source: message.source,
+          description: message.description,
+          data: message.data
+        };
+      }
+    }
+
+    // Initialize global message bus
+    window.messageBus = new MessageBus();
+
+    // Target Track class for tracking detected objects
+    class TargetTrack {
+      constructor(targetObject, detectingRadar) {
+        this.id = `TRK-${nextTrackId++}`;
+        this.targetId = targetObject.id;
+        this.targetObject = targetObject;
+        this.detectingRadar = detectingRadar;
+        this.firstDetectionTime = Date.now();
+        this.lastUpdateTime = Date.now();
+        this.confidence = 0.5;
+        this.classification = "UNKNOWN";
+
+        // Position and kinematic data
+        this.position = {
+          longitude: targetObject.longitude,
+          latitude: targetObject.latitude,
+          altitude: targetObject.altitude
+        };
+
+        this.velocity = {
+          speed: targetObject.speed,
+          heading: targetObject.heading,
+          climb: 0
+        };
+
+        this.rcs = this.calculateRCS(targetObject);
+        this.range = this.calculateRange(targetObject, detectingRadar.parentObject);
+        this.bearing = this.calculateBearing(targetObject, detectingRadar.parentObject);
+        this.elevation = this.calculateElevation(targetObject, detectingRadar.parentObject);
+
+        // Track history for prediction
+        this.positionHistory = [];
+        this.maxHistoryLength = 10;
+
+        this.addPositionToHistory();
+      }
+
+      update(targetObject) {
+        this.lastUpdateTime = Date.now();
+        this.targetObject = targetObject;
+
+        // Update position and kinematics
+        this.position = {
+          longitude: targetObject.longitude,
+          latitude: targetObject.latitude,
+          altitude: targetObject.altitude
+        };
+
+        this.velocity = {
+          speed: targetObject.speed,
+          heading: targetObject.heading,
+          climb: 0 // TODO: Calculate climb rate
+        };
+
+        this.range = this.calculateRange(targetObject, this.detectingRadar.parentObject);
+        this.bearing = this.calculateBearing(targetObject, this.detectingRadar.parentObject);
+        this.elevation = this.calculateElevation(targetObject, this.detectingRadar.parentObject);
+
+        // Update confidence based on track continuity
+        this.confidence = Math.min(1.0, this.confidence + 0.1);
+
+        this.addPositionToHistory();
+      }
+
+      addPositionToHistory() {
+        this.positionHistory.push({
+          time: Date.now(),
+          position: { ...this.position },
+          velocity: { ...this.velocity }
+        });
+
+        if (this.positionHistory.length > this.maxHistoryLength) {
+          this.positionHistory.shift();
+        }
+      }
+
+      calculateRCS(targetObject) {
+        const rcsData = window.AircraftConfig.rcsDatabase[targetObject.aircraftType];
+        if (!rcsData) return 1.0; // Default RCS
+
+        // Simple aspect angle calculation
+        const aspectAngle = Math.abs(this.bearing - targetObject.heading);
+        const normalizedAngle = Math.min(aspectAngle, 360 - aspectAngle);
+
+        if (normalizedAngle < 30) return rcsData.nose;
+        else if (normalizedAngle > 150) return rcsData.tail;
+        else return rcsData.beam;
+      }
+
+      calculateRange(targetObject, ownObject) {
+        const R = 6371000; // Earth radius in meters
+        const dLat = Cesium.Math.toRadians(targetObject.latitude - ownObject.latitude);
+        const dLon = Cesium.Math.toRadians(targetObject.longitude - ownObject.longitude);
+        const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
+                Math.cos(Cesium.Math.toRadians(ownObject.latitude)) * Math.cos(Cesium.Math.toRadians(targetObject.latitude)) *
+                Math.sin(dLon/2) * Math.sin(dLon/2);
+        const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+        const distance = R * c;
+
+        // Include altitude difference
+        const altDiff = targetObject.altitude - ownObject.altitude;
+        return Math.sqrt(distance * distance + altDiff * altDiff) / 1000; // Convert to km
+      }
+
+      calculateBearing(targetObject, ownObject) {
+        const dLon = Cesium.Math.toRadians(targetObject.longitude - ownObject.longitude);
+        const lat1 = Cesium.Math.toRadians(ownObject.latitude);
+        const lat2 = Cesium.Math.toRadians(targetObject.latitude);
+
+        const y = Math.sin(dLon) * Math.cos(lat2);
+        const x = Math.cos(lat1) * Math.sin(lat2) - Math.sin(lat1) * Math.cos(lat2) * Math.cos(dLon);
+
+        let bearing = Math.atan2(y, x);
+        return (Cesium.Math.toDegrees(bearing) + 360) % 360;
+      }
+
+      calculateElevation(targetObject, ownObject) {
+        const range = this.calculateRange(targetObject, ownObject) * 1000; // Convert back to meters
+        const altDiff = targetObject.altitude - ownObject.altitude;
+        return Cesium.Math.toDegrees(Math.atan2(altDiff, range));
+      }
+
+      isStale(currentTime = Date.now()) {
+        return (currentTime - this.lastUpdateTime) > 10000; // 10 seconds
+      }
+
+      getAgeSeconds(currentTime = Date.now()) {
+        return (currentTime - this.lastUpdateTime) / 1000;
+      }
+    }
+
+    // Radar Sensor class
+    class RadarSensor {
+      constructor(parentObject, sensorConfig, sensorName = 'primary') {
+        this.parentObject = parentObject;
+        this.sensorName = sensorName;
+        this.config = { ...sensorConfig };
+
+        // Operational state
+        this.enabled = sensorConfig.enabled;
+        this.emissionState = sensorConfig.emissionState; // active, passive, standby
+        this.currentMode = sensorConfig.modes[0]; // Default to first available mode
+
+        // Tracking data
+        this.tracks = new Map(); // trackId -> TargetTrack
+        this.maxTracks = sensorConfig.trackCapacity;
+
+        // Scan pattern data
+        this.currentScanAngle = 0;
+        this.scanDirection = 1; // 1 for clockwise, -1 for counter-clockwise
+        this.lastScanTime = Date.now();
+
+        // Cesium visualization entities
+        this.radarCone = null;
+        this.scanLine = null;
+
+        this.initializeVisualization();
+      }
+
+      initializeVisualization() {
+        if (!this.enabled) return;
+
+        const position = Cesium.Cartesian3.fromDegrees(
+          this.parentObject.longitude,
+          this.parentObject.latitude,
+          this.parentObject.altitude
+        );
+
+        // Get country-specific color
+        const countryStyle = getCountryStyle(this.parentObject.country);
+        const radarColor = Cesium.Color.fromCssColorString(countryStyle.flightPathColor);
+
+        // Get cylinder properties from config
+        const coneLength = this.config.cylinderLength || 100000; // meters
+        const coneRadius = this.config.cylinderTopRadius || 50000; // meters (top radius)
+        const coneBottomRadius = this.config.cylinderBottomRadius || 0; // meters (bottom radius)
+
+        // Calculate radar position using configuration parameters
+        const aircraftPosition = Cesium.Cartesian3.fromDegrees(
+          this.parentObject.longitude,
+          this.parentObject.latitude,
+          this.parentObject.altitude
+        );
+
+        // Get positioning parameters
+        const positioning = this.config.positioning || {};
+        const offsetX = positioning.offsetX || 0;
+        const offsetY = positioning.offsetY || 8;  // default forward offset
+        const offsetZ = positioning.offsetZ || 0;
+        const azimuthAngle = positioning.azimuthAngle || 0;
+        const elevationAngle = positioning.elevationAngle || 0;
+        const rollAngle = positioning.rollAngle || 0;
+
+        // Calculate aircraft heading and create transformation matrix
+        const headingRad = Cesium.Math.toRadians(this.parentObject.heading + azimuthAngle);
+        const pitchRad = Cesium.Math.toRadians(elevationAngle);
+        const rollRad = Cesium.Math.toRadians(rollAngle);
+
+        // Create local offset vector from aircraft center to radar position
+        const localOffset = new Cesium.Cartesian3(offsetX, offsetY, offsetZ);
+
+        // Transform local offset to world coordinates based on aircraft orientation
+        const aircraftHeadingRad = Cesium.Math.toRadians(this.parentObject.heading);
+        const aircraftTransform = Cesium.Matrix3.fromHeadingPitchRoll(
+          new Cesium.HeadingPitchRoll(aircraftHeadingRad, 0, 0)
+        );
+        const worldOffset = Cesium.Matrix3.multiplyByVector(aircraftTransform, localOffset, new Cesium.Cartesian3());
+        const radarPosition = Cesium.Cartesian3.add(aircraftPosition, worldOffset, new Cesium.Cartesian3());
+
+        // Calculate cone center position (forward from radar position)
+        const forwardOffset = coneLength / 2;
+        const forwardDirection = new Cesium.Cartesian3(
+          Math.sin(headingRad),
+          Math.cos(headingRad),
+          Math.sin(pitchRad)
+        );
+
+        const coneOffsetVector = Cesium.Cartesian3.multiplyByScalar(forwardDirection, forwardOffset, new Cesium.Cartesian3());
+        const conePosition = Cesium.Cartesian3.add(radarPosition, coneOffsetVector, new Cesium.Cartesian3());
+
+        // Create orientation for the radar cone to point in aircraft heading direction
+        const coneOrientation = Cesium.Transforms.headingPitchRollQuaternion(
+          radarPosition,
+          new Cesium.HeadingPitchRoll(aircraftHeadingRad, 0, 0)
+        );
+
+        // Get visualization parameters
+        const coneAlpha = positioning.coneVisualizationAlpha || 0.15;
+        const outlineAlpha = positioning.coneOutlineAlpha || 0.5;
+
+        // Create the 3D filled cone geometry using cylinder with tapered ends
+        this.radarCone = viewer.entities.add({
+          id: `radar_cone_${this.parentObject.id}_${this.sensorName}`,
+          position: new Cesium.CallbackProperty(() => {
+            // Direct reference to aircraft entity position - exact same location
+            try {
+              if (!this.parentObject?.entity?.position) {
+                return Cesium.Cartesian3.ZERO;
+              }
+              const pos = this.parentObject.entity.position.getValue(Cesium.JulianDate.now());
+              return pos || Cesium.Cartesian3.ZERO;
+            } catch (e) {
+              console.warn('Radar position callback error:', e);
+              return Cesium.Cartesian3.ZERO;
+            }
+          }, false),
+          orientation: new Cesium.CallbackProperty(() => {
+            // Use cylinder orientation from config
+            try {
+              const heading = Cesium.Math.toRadians(this.config.cylinderHeading || 0);
+              const pitch = Cesium.Math.toRadians(this.config.cylinderPitch || 0);
+              const roll = Cesium.Math.toRadians(this.config.cylinderRoll || 0);
+
+              if (!this.parentObject?.entity?.position) {
+                return Cesium.Quaternion.IDENTITY;
+              }
+
+              const aircraftPos = this.parentObject.entity.position.getValue(Cesium.JulianDate.now());
+              if (!aircraftPos) {
+                return Cesium.Quaternion.IDENTITY;
+              }
+
+              return Cesium.Transforms.headingPitchRollQuaternion(
+                aircraftPos,
+                new Cesium.HeadingPitchRoll(heading, pitch, roll)
+              );
+            } catch (e) {
+              console.warn('Radar orientation callback error:', e);
+              return Cesium.Quaternion.IDENTITY;
+            }
+          }, false),
+          cylinder: {
+            length: this.config.cylinderLength || 100000,
+            topRadius: this.config.cylinderTopRadius || 50000,
+            bottomRadius: this.config.cylinderBottomRadius || 0,
+            material: radarColor.withAlpha(coneAlpha),
+            outline: false, // Remove outline from main cone
+            numberOfVerticalLines: 8,
+            slices: 16
+          },
+          show: this.emissionState === 'active'
+        });
+
+
+        // Create rotation matrix for all cone geometry
+        const rotationMatrix = Cesium.Matrix3.fromHeadingPitchRoll(
+          new Cesium.HeadingPitchRoll(headingRad, pitchRad, rollRad)
+        );
+
+        // Create radial lines from radar position to cone edge with dynamic positioning
+        this.coneOutlines = [];
+        const numRadials = 8;
+
+        for (let i = 0; i < numRadials; i++) {
+          const radialAngle = (i / numRadials) * 2 * Math.PI;
+
+          this.coneOutlines.push(viewer.entities.add({
+            id: `radar_outline_${this.parentObject.id}_${this.sensorName}_${i}`,
+            polyline: {
+              positions: new Cesium.CallbackProperty(() => {
+                try {
+                  if (!this.parentObject?.entity?.position) {
+                    return [Cesium.Cartesian3.ZERO, Cesium.Cartesian3.ZERO];
+                  }
+
+                  // Get current aircraft position (radar apex)
+                  const radarPos = this.parentObject.entity.position.getValue(Cesium.JulianDate.now());
+                  if (!radarPos) {
+                    return [Cesium.Cartesian3.ZERO, Cesium.Cartesian3.ZERO];
+                  }
+
+                  // Get current cylinder properties
+                  const coneLength = this.config.cylinderLength || 100000;
+                  const coneRadius = this.config.cylinderTopRadius || 50000;
+                  const heading = Cesium.Math.toRadians(this.config.cylinderHeading || 0);
+                  const pitch = Cesium.Math.toRadians(this.config.cylinderPitch || 0);
+                  const roll = Cesium.Math.toRadians(this.config.cylinderRoll || 0);
+
+                  // Create rotation matrix from cylinder orientation
+                  const rotationMatrix = Cesium.Matrix3.fromHeadingPitchRoll(
+                    new Cesium.HeadingPitchRoll(heading, pitch, roll)
+                  );
+
+                  // Calculate end point in local coordinates
+                  const localX = Math.cos(radialAngle) * coneRadius;
+                  const localY = Math.sin(radialAngle) * coneRadius;
+                  const endOffset = new Cesium.Cartesian3(localX, localY, coneLength);
+
+                  // Transform to world coordinates
+                  const rotatedEndOffset = Cesium.Matrix3.multiplyByVector(rotationMatrix, endOffset, new Cesium.Cartesian3());
+                  const endPosition = Cesium.Cartesian3.add(radarPos, rotatedEndOffset, new Cesium.Cartesian3());
+
+                  return [radarPos, endPosition];
+                } catch (e) {
+                  console.warn('Radial line position callback error:', e);
+                  return [Cesium.Cartesian3.ZERO, Cesium.Cartesian3.ZERO];
+                }
+              }, false),
+              width: 1,
+              material: radarColor.withAlpha(outlineAlpha),
+              followSurface: false
+            },
+            show: this.emissionState === 'active'
+          }));
+        }
+
+        // Create cone base circle outline at the far end of the cone with dynamic positioning
+        this.coneCircle = viewer.entities.add({
+          id: `radar_circle_${this.parentObject.id}_${this.sensorName}`,
+          polyline: {
+            positions: new Cesium.CallbackProperty(() => {
+              try {
+                if (!this.parentObject?.entity?.position) {
+                  return [Cesium.Cartesian3.ZERO];
+                }
+
+                // Get current aircraft position (radar apex)
+                const radarPos = this.parentObject.entity.position.getValue(Cesium.JulianDate.now());
+                if (!radarPos) {
+                  return [Cesium.Cartesian3.ZERO];
+                }
+
+                // Get current cylinder properties
+                const coneLength = this.config.cylinderLength || 100000;
+                const coneRadius = this.config.cylinderTopRadius || 50000;
+                const heading = Cesium.Math.toRadians(this.config.cylinderHeading || 0);
+                const pitch = Cesium.Math.toRadians(this.config.cylinderPitch || 0);
+                const roll = Cesium.Math.toRadians(this.config.cylinderRoll || 0);
+
+                // Create rotation matrix from cylinder orientation
+                const rotationMatrix = Cesium.Matrix3.fromHeadingPitchRoll(
+                  new Cesium.HeadingPitchRoll(heading, pitch, roll)
+                );
+
+                // Generate circle points at the far end of the cone
+                const circlePoints = [];
+                for (let i = 0; i <= 16; i++) {
+                  const angle = (i / 16) * 2 * Math.PI;
+                  const localX = Math.cos(angle) * coneRadius;
+                  const localY = Math.sin(angle) * coneRadius;
+
+                  // Position circle at the far end of the cone
+                  const circleOffset = new Cesium.Cartesian3(localX, localY, coneLength);
+                  const rotatedCircleOffset = Cesium.Matrix3.multiplyByVector(rotationMatrix, circleOffset, new Cesium.Cartesian3());
+                  const circlePosition = Cesium.Cartesian3.add(radarPos, rotatedCircleOffset, new Cesium.Cartesian3());
+
+                  circlePoints.push(circlePosition);
+                }
+
+                return circlePoints;
+              } catch (e) {
+                console.warn('Circle outline position callback error:', e);
+                return [Cesium.Cartesian3.ZERO];
+              }
+            }, false),
+            width: 2,
+            material: radarColor.withAlpha(outlineAlpha + 0.3),
+            followSurface: false
+          },
+          show: this.emissionState === 'active'
+        });
+
+        // Add label at radar cone for identification
+        this.radarLabel = viewer.entities.add({
+          id: `radar_label_${this.parentObject.id}_${this.sensorName}`,
+          position: new Cesium.CallbackProperty(() => {
+            // Direct reference to aircraft entity position - exact same location
+            try {
+              if (!this.parentObject?.entity?.position) {
+                return Cesium.Cartesian3.ZERO;
+              }
+              const pos = this.parentObject.entity.position.getValue(Cesium.JulianDate.now());
+              return pos || Cesium.Cartesian3.ZERO;
+            } catch (e) {
+              console.warn('Radar label position callback error:', e);
+              return Cesium.Cartesian3.ZERO;
+            }
+          }, false),
+          label: {
+            text: `${this.sensorName.toUpperCase()} RADAR\n${this.parentObject.callsign}`,
+            font: '12pt monospace',
+            fillColor: radarColor,
+            outlineColor: Cesium.Color.BLACK,
+            outlineWidth: 2,
+            style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+            verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
+            pixelOffset: new Cesium.Cartesian2(0, -10),
+            disableDepthTestDistance: Number.POSITIVE_INFINITY
+          },
+          show: this.emissionState === 'active'
+        });
+
+        // Store all outline elements for cleanup
+        this.radarOutlineElements = [this.radarCone, this.coneCircle, this.radarLabel, ...this.coneOutlines];
+      }
+
+      updateVisualization() {
+        if (!this.radarCone || !this.enabled) return;
+
+        const showRadar = this.emissionState === 'active';
+
+        // Update visibility only - positions are handled by CallbackProperty
+        this.radarCone.show = showRadar;
+
+        if (this.coneCircle) {
+          this.coneCircle.show = showRadar;
+        }
+
+        if (this.radarLabel) {
+          this.radarLabel.show = showRadar;
+        }
+
+        if (this.coneOutlines) {
+          this.coneOutlines.forEach(outline => {
+            outline.show = showRadar;
+          });
+        }
+      }
+
+      performScan(allObjects) {
+        if (!this.enabled || this.emissionState !== 'active') return [];
+
+        const currentTime = Date.now();
+        const detections = [];
+
+        // Update scan angle
+        const scanSpeed = 360 / (this.config.sweepRate * 1000); // degrees per millisecond
+        const deltaTime = currentTime - this.lastScanTime;
+        this.currentScanAngle += scanSpeed * deltaTime * this.scanDirection;
+
+        if (this.currentScanAngle >= this.config.scanCoverage.azimuth / 2) {
+          this.currentScanAngle = this.config.scanCoverage.azimuth / 2;
+          this.scanDirection = -1;
+        } else if (this.currentScanAngle <= -this.config.scanCoverage.azimuth / 2) {
+          this.currentScanAngle = -this.config.scanCoverage.azimuth / 2;
+          this.scanDirection = 1;
+        }
+
+        this.lastScanTime = currentTime;
+
+        // Check each object for detection
+        for (const obj of allObjects) {
+          if (obj.id === this.parentObject.id) continue; // Don't detect self
+
+          const detection = this.attemptDetection(obj);
+          if (detection) {
+            detections.push(detection);
+
+            // Update or create track
+            let track = this.tracks.get(obj.id);
+            if (track) {
+              track.update(obj);
+            } else if (this.tracks.size < this.maxTracks) {
+              track = new TargetTrack(obj, this);
+              this.tracks.set(obj.id, track);
+
+              // Send detection message
+              if (window.messageBus) {
+                window.messageBus.publishMessage({
+                  category: 'SENSOR',
+                  type: 'target_detected',
+                  priority: 'HIGH',
+                  source: this.parentObject.callsign,
+                  data: {
+                    targetId: track.id,
+                    range: track.range.toFixed(1),
+                    bearing: track.bearing.toFixed(0),
+                    elevation: track.elevation.toFixed(1),
+                    rcs: track.rcs.toFixed(3),
+                    confidence: track.confidence.toFixed(2)
+                  },
+                  description: `${this.parentObject.callsign} radar detected target at ${track.range.toFixed(1)}km, bearing ${track.bearing.toFixed(0)}°`
+                });
+              }
+            }
+          }
+        }
+
+        // Clean up stale tracks
+        for (const [objId, track] of this.tracks.entries()) {
+          if (track.isStale()) {
+            this.tracks.delete(objId);
+
+            // Send track lost message
+            if (window.messageBus) {
+              window.messageBus.publishMessage({
+                category: 'SENSOR',
+                type: 'track_lost',
+                priority: 'MEDIUM',
+                source: this.parentObject.callsign,
+                data: { targetId: track.id, lastRange: track.range.toFixed(1) },
+                description: `${this.parentObject.callsign} lost radar track ${track.id}`
+              });
+            }
+          }
+        }
+
+        return detections;
+      }
+
+      attemptDetection(targetObject) {
+        // Calculate range and bearing
+        const range = this.calculateRange(targetObject);
+        const bearing = this.calculateBearing(targetObject);
+        const elevation = this.calculateElevation(targetObject);
+
+        // Check if target is within radar coverage
+        if (range > this.config.detectionRange) return null;
+
+        const bearingDiff = Math.abs(bearing - this.parentObject.heading);
+        const normalizedBearing = Math.min(bearingDiff, 360 - bearingDiff);
+        if (normalizedBearing > this.config.scanCoverage.azimuth / 2) return null;
+
+        if (Math.abs(elevation) > this.config.scanCoverage.elevation / 2) return null;
+
+        // Calculate RCS-based detection probability
+        const rcsData = window.AircraftConfig.rcsDatabase[targetObject.aircraftType];
+        const targetRCS = rcsData ? rcsData.average : 1.0;
+
+        if (targetRCS < this.config.rcsThreshold) return null;
+
+        // Radar equation: Detection range ∝ (RCS)^(1/4)
+        const detectionRange = this.config.detectionRange * Math.pow(targetRCS / 1.0, 0.25);
+        if (range > detectionRange) return null;
+
+        // Calculate detection probability (simplified)
+        const snr = (targetRCS / Math.pow(range / this.config.detectionRange, 4));
+        const detectionProbability = Math.min(0.95, snr * 0.8 + 0.1);
+
+        if (Math.random() > detectionProbability) return null;
+
+        return {
+          targetObject: targetObject,
+          range: range,
+          bearing: bearing,
+          elevation: elevation,
+          rcs: targetRCS,
+          snr: snr,
+          detectionProbability: detectionProbability
+        };
+      }
+
+      calculateRange(targetObject) {
+        const R = 6371000; // Earth radius in meters
+        const dLat = Cesium.Math.toRadians(targetObject.latitude - this.parentObject.latitude);
+        const dLon = Cesium.Math.toRadians(targetObject.longitude - this.parentObject.longitude);
+        const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
+                Math.cos(Cesium.Math.toRadians(this.parentObject.latitude)) * Math.cos(Cesium.Math.toRadians(targetObject.latitude)) *
+                Math.sin(dLon/2) * Math.sin(dLon/2);
+        const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+        const distance = R * c;
+
+        const altDiff = targetObject.altitude - this.parentObject.altitude;
+        return Math.sqrt(distance * distance + altDiff * altDiff) / 1000; // Convert to km
+      }
+
+      calculateBearing(targetObject) {
+        const dLon = Cesium.Math.toRadians(targetObject.longitude - this.parentObject.longitude);
+        const lat1 = Cesium.Math.toRadians(this.parentObject.latitude);
+        const lat2 = Cesium.Math.toRadians(targetObject.latitude);
+
+        const y = Math.sin(dLon) * Math.cos(lat2);
+        const x = Math.cos(lat1) * Math.sin(lat2) - Math.sin(lat1) * Math.cos(lat2) * Math.cos(dLon);
+
+        let bearing = Math.atan2(y, x);
+        return (Cesium.Math.toDegrees(bearing) + 360) % 360;
+      }
+
+      calculateElevation(targetObject) {
+        const range = this.calculateRange(targetObject) * 1000; // Convert to meters
+        const altDiff = targetObject.altitude - this.parentObject.altitude;
+        return Cesium.Math.toDegrees(Math.atan2(altDiff, range));
+      }
+
+      setEmissionState(state) {
+        this.emissionState = state;
+        this.updateVisualization();
+
+        if (window.messageBus) {
+          window.messageBus.publishMessage({
+            category: 'SENSOR',
+            type: 'emission_state_change',
+            priority: 'LOW',
+            source: this.parentObject.callsign,
+            data: { sensorName: this.sensorName, newState: state },
+            description: `${this.parentObject.callsign} ${this.sensorName} radar: ${state}`
+          });
+        }
+      }
+
+      destroy() {
+        // Clean up main radar cone
+        if (this.radarCone) {
+          viewer.entities.remove(this.radarCone);
+          this.radarCone = null;
+        }
+
+        // Clean up cone circle outline
+        if (this.coneCircle) {
+          viewer.entities.remove(this.coneCircle);
+          this.coneCircle = null;
+        }
+        // Clean up radar label
+        if (this.radarLabel) {
+          viewer.entities.remove(this.radarLabel);
+          this.radarLabel = null;
+        }
+
+        // Clean up radial outline lines
+        if (this.coneOutlines) {
+          this.coneOutlines.forEach(outline => {
+            viewer.entities.remove(outline);
+          });
+          this.coneOutlines = null;
+        }
+
+        // Clean up any remaining elements
+        if (this.radarOutlineElements) {
+          this.radarOutlineElements.forEach(element => {
+            try {
+              viewer.entities.remove(element);
+            } catch (e) {
+              // Entity may already be removed
+            }
+          });
+          this.radarOutlineElements = null;
+        }
+      }
+    }
+
+    // Radar Sensor System class - manages multiple sensors per aircraft
+    class RadarSensorSystem {
+      constructor(parentObject) {
+        this.parentObject = parentObject;
+        this.sensors = new Map(); // sensorName -> RadarSensor
+        this.allTracks = new Map(); // Consolidated tracks from all sensors
+        this.networkTracks = new Map(); // Tracks shared from other aircraft
+
+        this.initializeSensors();
+      }
+
+      initializeSensors() {
+        const radarConfig = window.AircraftConfig.radarSystems[this.parentObject.aircraftType];
+        if (!radarConfig) return;
+
+        for (const [sensorName, sensorConfig] of Object.entries(radarConfig)) {
+          const sensor = new RadarSensor(this.parentObject, sensorConfig, sensorName);
+          this.sensors.set(sensorName, sensor);
+        }
+      }
+
+      update(allObjects) {
+        const allDetections = [];
+
+        // Update all sensors
+        for (const [sensorName, sensor] of this.sensors.entries()) {
+          const detections = sensor.performScan(allObjects);
+          allDetections.push(...detections);
+          sensor.updateVisualization();
+        }
+
+        // Sensor fusion - combine tracks from multiple sensors
+        this.fuseSensorData();
+
+        return allDetections;
+      }
+
+      fuseSensorData() {
+        // Simple sensor fusion - just collect all tracks
+        this.allTracks.clear();
+
+        for (const [sensorName, sensor] of this.sensors.entries()) {
+          for (const [objId, track] of sensor.tracks.entries()) {
+            if (!this.allTracks.has(objId)) {
+              this.allTracks.set(objId, track);
+            } else {
+              // TODO: Implement proper track correlation and fusion
+              // For now, just keep the most confident track
+              const existingTrack = this.allTracks.get(objId);
+              if (track.confidence > existingTrack.confidence) {
+                this.allTracks.set(objId, track);
+              }
+            }
+          }
+        }
+      }
+
+      getSensor(sensorName) {
+        return this.sensors.get(sensorName);
+      }
+
+      getAllTracks() {
+        return Array.from(this.allTracks.values());
+      }
+
+      getTrackCount() {
+        return this.allTracks.size;
+      }
+
+      setSensorEmissionState(sensorName, state) {
+        const sensor = this.sensors.get(sensorName);
+        if (sensor) {
+          sensor.setEmissionState(state);
+        }
+      }
+
+      destroy() {
+        for (const [sensorName, sensor] of this.sensors.entries()) {
+          sensor.destroy();
+        }
+        this.sensors.clear();
+        this.allTracks.clear();
+      }
+    }
+
     // Object data structure
     class TrackedObject {
       constructor(type, modelUrl, platform, initialHeading = null, callsignBase = null, increment = null) {
@@ -576,9 +1489,15 @@
         this.flightProgress = 0;
         this.flightSpeed = 250; // knots
         this.flightStartTime = null;
-        
+
+        // Radar sensor system
+        this.radarSystem = null;
+
         this.entity = null;
         this.createEntity();
+
+        // Initialize radar system after entity creation
+        this.initializeRadarSystem();
       }
 
       createEntity() {
@@ -1287,7 +2206,80 @@
         this.flightPlan = 'None';
       }
 
+      initializeRadarSystem() {
+        this.radarSystem = new RadarSensorSystem(this);
+      }
+
+      updateRadarSystem(allObjects) {
+        if (this.radarSystem) {
+          return this.radarSystem.update(allObjects);
+        }
+        return [];
+      }
+
+      getRadarTracks() {
+        return this.radarSystem ? this.radarSystem.getAllTracks() : [];
+      }
+
+      getRadarTrackCount() {
+        return this.radarSystem ? this.radarSystem.getTrackCount() : 0;
+      }
+
+      setRadarEmissionState(sensorName, state) {
+        if (this.radarSystem) {
+          this.radarSystem.setSensorEmissionState(sensorName, state);
+        }
+      }
+
+      updateRadarParameter(sensorName, paramName, value) {
+        if (!this.radarSystem) return;
+
+        const sensor = this.radarSystem.getSensor(sensorName);
+        if (!sensor) return;
+
+        // Convert string values to appropriate types
+        let convertedValue = value;
+        if (paramName === 'detectionRange' || paramName.includes('Angle') || paramName.includes('offset') ||
+            paramName === 'coneFieldOfView' || paramName.includes('cylinder')) {
+          convertedValue = parseFloat(value);
+        }
+
+        // Update the sensor configuration
+        if (paramName === 'detectionRange') {
+          sensor.config.detectionRange = convertedValue;
+        } else if (paramName.startsWith('cylinder')) {
+          // Update cylinder properties directly in config
+          sensor.config[paramName] = convertedValue;
+        } else if (sensor.config.positioning) {
+          sensor.config.positioning[paramName] = convertedValue;
+        } else {
+          // Initialize positioning object if it doesn't exist
+          sensor.config.positioning = sensor.config.positioning || {};
+          sensor.config.positioning[paramName] = convertedValue;
+        }
+
+        // Recreate the radar visualization with new parameters
+        sensor.destroy();
+        sensor.initializeVisualization();
+
+        // Send parameter change message
+        if (window.messageBus) {
+          window.messageBus.publishMessage({
+            category: 'SENSOR',
+            type: 'radar_parameter_change',
+            priority: 'LOW',
+            source: this.callsign,
+            data: { sensorName, paramName, newValue: convertedValue },
+            description: `${this.callsign} ${sensorName} radar ${paramName}: ${convertedValue}`
+          });
+        }
+      }
+
       remove() {
+        if (this.radarSystem) {
+          this.radarSystem.destroy();
+          this.radarSystem = null;
+        }
         if (this.entity) {
           viewer.entities.remove(this.entity);
         }
@@ -1457,6 +2449,84 @@
               </div>
             ` : ''}
           </div>
+
+          <div class="radar-section">
+            <div style="color: #4a9eff; font-size: 12px; margin-bottom: 8px; border-top: 1px solid #555; padding-top: 10px;">
+              📡 RADAR STATUS
+            </div>
+            <div style="display: flex; gap: 8px; margin-bottom: 8px; align-items: center;">
+              <span style="color: #aaa; font-size: 11px;">Tracks: ${obj.getRadarTrackCount()}</span>
+              <span style="color: #aaa; font-size: 11px;">Primary: ${obj.radarSystem?.getSensor('primary')?.emissionState || 'N/A'}</span>
+            </div>
+            <div class="radar-controls">
+              <button class="btn-small" onclick="toggleRadarEmission(${obj.id}, 'primary')" style="background: ${obj.radarSystem?.getSensor('primary')?.emissionState === 'active' ? '#4a9eff' : '#666'};">
+                Primary
+              </button>
+              ${obj.radarSystem?.getSensor('secondary') ? `
+                <button class="btn-small" onclick="toggleRadarEmission(${obj.id}, 'secondary')" style="background: ${obj.radarSystem.getSensor('secondary').emissionState === 'active' ? '#4a9eff' : '#666'};">
+                  Secondary
+                </button>
+              ` : ''}
+            </div>
+
+            ${obj.radarSystem?.getSensor('primary') ? `
+              <div style="color: #4a9eff; font-size: 11px; margin: 8px 0 4px 0;">CYLINDER PROPERTIES</div>
+              <div class="radar-params" style="display: grid; grid-template-columns: 1fr 1fr; gap: 4px; font-size: 10px;">
+                <div>
+                  <label style="color: #aaa;">Length:</label>
+                  <input class="editable" style="width: 45px;" value="${obj.radarSystem.getSensor('primary').config.cylinderLength || 100000}" onchange="updateRadarParam(${obj.id}, 'primary', 'cylinderLength', this.value)">m
+                </div>
+                <div>
+                  <label style="color: #aaa;">Top Radius:</label>
+                  <input class="editable" style="width: 45px;" value="${obj.radarSystem.getSensor('primary').config.cylinderTopRadius || 50000}" onchange="updateRadarParam(${obj.id}, 'primary', 'cylinderTopRadius', this.value)">m
+                </div>
+                <div>
+                  <label style="color: #aaa;">Bottom Radius:</label>
+                  <input class="editable" style="width: 45px;" value="${obj.radarSystem.getSensor('primary').config.cylinderBottomRadius || 0}" onchange="updateRadarParam(${obj.id}, 'primary', 'cylinderBottomRadius', this.value)">m
+                </div>
+                <div>
+                  <label style="color: #aaa;">Heading:</label>
+                  <input class="editable" style="width: 45px;" value="${obj.radarSystem.getSensor('primary').config.cylinderHeading || 0}" onchange="updateRadarParam(${obj.id}, 'primary', 'cylinderHeading', this.value)">°
+                </div>
+                <div>
+                  <label style="color: #aaa;">Pitch:</label>
+                  <input class="editable" style="width: 45px;" value="${obj.radarSystem.getSensor('primary').config.cylinderPitch || 0}" onchange="updateRadarParam(${obj.id}, 'primary', 'cylinderPitch', this.value)">°
+                </div>
+                <div>
+                  <label style="color: #aaa;">Roll:</label>
+                  <input class="editable" style="width: 45px;" value="${obj.radarSystem.getSensor('primary').config.cylinderRoll || 0}" onchange="updateRadarParam(${obj.id}, 'primary', 'cylinderRoll', this.value)">°
+                </div>
+                <div>
+                  <label style="color: #aaa;">Alpha:</label>
+                  <input class="editable" style="width: 45px;" value="${obj.radarSystem.getSensor('primary').config.positioning?.coneVisualizationAlpha || 0.15}" onchange="updateRadarParam(${obj.id}, 'primary', 'coneVisualizationAlpha', this.value)">
+                </div>
+                <div>
+                  <label style="color: #aaa;">Range:</label>
+                  <input class="editable" style="width: 45px;" value="${obj.radarSystem.getSensor('primary').config.detectionRange || 100}" onchange="updateRadarParam(${obj.id}, 'primary', 'detectionRange', this.value)">km
+                </div>
+              </div>
+              <div style="color: #4a9eff; font-size: 11px; margin: 8px 0 4px 0;">POSITION DEBUG</div>
+              <div class="position-debug" style="display: grid; grid-template-columns: 1fr; gap: 2px; font-size: 9px;">
+                <div style="color: #aaa;">
+                  Aircraft: x=${(obj.longitude || 0).toFixed(6)} y=${(obj.latitude || 0).toFixed(6)} z=${(obj.altitude || 0).toFixed(0)}m
+                </div>
+                <div style="color: #4a9eff;">
+                  Cylinder Position: <span id="cylinder-pos-${obj.id}">Calculating...</span>
+                </div>
+              </div>
+            ` : ''}
+
+            ${obj.getRadarTrackCount() > 0 ? `
+              <div class="radar-tracks" style="margin-top: 8px; max-height: 60px; overflow-y: auto;">
+                ${obj.getRadarTracks().slice(0, 2).map(track => `
+                  <div style="font-size: 10px; color: #ccc; margin-bottom: 2px;">
+                    ${track.id}: ${track.range.toFixed(1)}km @ ${track.bearing.toFixed(0)}°
+                  </div>
+                `).join('')}
+                ${obj.getRadarTrackCount() > 2 ? `<div style="font-size: 9px; color: #888;">+${obj.getRadarTrackCount() - 2} more tracks</div>` : ''}
+              </div>
+            ` : ''}
+          </div>
           </div>
         </div>
       `;
@@ -1565,6 +2635,63 @@
       }
     }
 
+    function updateRadarPositionDebug() {
+      try {
+        if (!objects || !Array.isArray(objects)) {
+          return;
+        }
+
+        objects.forEach(obj => {
+          try {
+            if (!obj || !obj.radarSystem || !obj.radarSystem.getSensor('primary')) {
+              return;
+            }
+
+            const sensor = obj.radarSystem.getSensor('primary');
+
+        const aircraftPos = Cesium.Cartesian3.fromDegrees(
+          obj.longitude || 0,
+          obj.latitude || 0,
+          obj.altitude || 0
+        );
+          const aircraftHeadingRad = Cesium.Math.toRadians(obj.heading || 0);
+          const coneLength = sensor.config.detectionRange * 1000;
+          const forwardDirection = new Cesium.Cartesian3(
+            Math.sin(aircraftHeadingRad),
+            Math.cos(aircraftHeadingRad),
+            0
+          );
+
+          // CYLINDER: Direct reference to aircraft entity position (same as cylinder position)
+          let cylinderLon = 0, cylinderLat = 0, cylinderAlt = 0;
+          try {
+            if (obj.entity?.position) {
+              const cylinderPos = obj.entity.position.getValue(Cesium.JulianDate.now());
+              if (cylinderPos) {
+                const cylinderCartographic = Cesium.Cartographic.fromCartesian(cylinderPos);
+                cylinderLon = Cesium.Math.toDegrees(cylinderCartographic.longitude);
+                cylinderLat = Cesium.Math.toDegrees(cylinderCartographic.latitude);
+                cylinderAlt = cylinderCartographic.height;
+              }
+            }
+          } catch (e) {
+            console.warn('Error getting cylinder position:', e);
+          }
+
+          // Update display element
+          const cylinderPosElement = document.getElementById(`cylinder-pos-${obj.id}`);
+          if (cylinderPosElement) {
+            cylinderPosElement.textContent = `x=${cylinderLon.toFixed(6)} y=${cylinderLat.toFixed(6)} z=${cylinderAlt.toFixed(0)}m`;
+          }
+          } catch (objError) {
+            console.warn('Error updating radar debug for object:', obj?.id, objError);
+          }
+        });
+      } catch (error) {
+        console.warn('Error in updateRadarPositionDebug:', error);
+      }
+    }
+
     function updateObjectCards() {
       const container = document.getElementById('object-cards-container');
       container.innerHTML = objects.map(obj => createObjectCard(obj)).join('');
@@ -1650,7 +2777,16 @@
       objects.forEach(obj => {
         obj.updateCalculatedFields();
       });
+
+      // Update radar systems and process detections
+      objects.forEach(obj => {
+        if (obj.radarSystem) {
+          obj.updateRadarSystem(objects);
+        }
+      });
+
       updateObjectData(); // Only update data, not full HTML regeneration
+      updateRadarPositionDebug(); // Update radar position debug display
     }
 
     // Update more frequently for real-time flight data
@@ -2186,8 +3322,41 @@
       }
     }, false);
 
+    // Radar control functions
+    function toggleRadarEmission(objectId, sensorName) {
+      const obj = objects.find(obj => obj.id === objectId);
+      if (!obj || !obj.radarSystem) return;
+
+      const sensor = obj.radarSystem.getSensor(sensorName);
+      if (!sensor) return;
+
+      // Cycle through emission states: active -> standby -> passive -> active
+      const states = ['active', 'standby', 'passive'];
+      const currentIndex = states.indexOf(sensor.emissionState);
+      const nextIndex = (currentIndex + 1) % states.length;
+      const nextState = states[nextIndex];
+
+      obj.setRadarEmissionState(sensorName, nextState);
+      updateObjectCards(); // Refresh UI to show new state
+    }
+
+    function updateRadarParam(objectId, sensorName, paramName, value) {
+      const obj = objects.find(obj => obj.id === objectId);
+      if (!obj) return;
+
+      // Update the radar parameter
+      obj.updateRadarParameter(sensorName, paramName, value);
+
+      // Refresh the UI to show updated values
+      setTimeout(() => {
+        updateObjectCards();
+      }, 100); // Small delay to allow radar recreation to complete
+    }
+
     // Make functions global for onclick handlers
     window.updateObjectField = updateObjectField;
+    window.toggleRadarEmission = toggleRadarEmission;
+    window.updateRadarParam = updateRadarParam;
     window.updateCallsign = updateCallsign;
     window.updateCallsignBase = updateCallsignBase;
     window.updateCallsignIncrement = updateCallsignIncrement;
