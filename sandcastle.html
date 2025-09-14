@@ -930,7 +930,7 @@
               if (!this.parentObject?.entity?.position) {
                 return Cesium.Cartesian3.ZERO;
               }
-              const pos = this.parentObject.entity.position.getValue(Cesium.JulianDate.now());
+              const pos = this.parentObject.entity.position.getValue(viewer.clock.currentTime);
               return pos || Cesium.Cartesian3.ZERO;
             } catch (e) {
               console.warn('Radar position callback error:', e);
@@ -948,7 +948,7 @@
                 return Cesium.Quaternion.IDENTITY;
               }
 
-              const aircraftPos = this.parentObject.entity.position.getValue(Cesium.JulianDate.now());
+              const aircraftPos = this.parentObject.entity.position.getValue(viewer.clock.currentTime);
               if (!aircraftPos) {
                 return Cesium.Quaternion.IDENTITY;
               }
@@ -997,7 +997,7 @@
                   }
 
                   // Get current aircraft position (radar apex)
-                  const radarPos = this.parentObject.entity.position.getValue(Cesium.JulianDate.now());
+                  const radarPos = this.parentObject.entity.position.getValue(viewer.clock.currentTime);
                   if (!radarPos) {
                     return [Cesium.Cartesian3.ZERO, Cesium.Cartesian3.ZERO];
                   }
@@ -1048,7 +1048,7 @@
                 }
 
                 // Get current aircraft position (radar apex)
-                const radarPos = this.parentObject.entity.position.getValue(Cesium.JulianDate.now());
+                const radarPos = this.parentObject.entity.position.getValue(viewer.clock.currentTime);
                 if (!radarPos) {
                   return [Cesium.Cartesian3.ZERO];
                 }
@@ -1102,7 +1102,7 @@
               if (!this.parentObject?.entity?.position) {
                 return Cesium.Cartesian3.ZERO;
               }
-              const pos = this.parentObject.entity.position.getValue(Cesium.JulianDate.now());
+              const pos = this.parentObject.entity.position.getValue(viewer.clock.currentTime);
               return pos || Cesium.Cartesian3.ZERO;
             } catch (e) {
               console.warn('Radar label position callback error:', e);
@@ -2141,7 +2141,20 @@
         // Apply to entity
         this.entity.position = positionProperty;
         this.entity.orientation = orientationProperty;
-        
+
+        // Configure Cesium timeline for this flight
+        const startTime = Cesium.JulianDate.fromDate(new Date(this.flightStartTime));
+        const endTime = Cesium.JulianDate.fromDate(new Date(enhancedFlightData[enhancedFlightData.length - 1].time));
+
+        // Set viewer timeline to match flight duration
+        viewer.clock.startTime = startTime.clone();
+        viewer.clock.stopTime = endTime.clone();
+        viewer.clock.currentTime = startTime.clone();
+        viewer.timeline.zoomTo(startTime, endTime);
+
+        // Start Cesium animation
+        viewer.clock.shouldAnimate = true;
+
         // Update flight plan status
         this.flightPlan = `Flying (${this.waypoints.length} waypoints)`;
       }
@@ -2177,6 +2190,10 @@
         
         this.entity.position = position;
         this.entity.orientation = orientation;
+
+        // Stop Cesium animation when flight is stopped
+        viewer.clock.shouldAnimate = false;
+
         this.flightPlan = `Planned (${this.waypoints.length} waypoints)`;
       }
 
@@ -2395,12 +2412,8 @@
               <button class="btn ${obj.isPlanning ? 'danger' : ''}" onclick="toggleFlightPlanning(${obj.id})">
                 ${obj.isPlanning ? 'Stop Planning' : 'Plan Flight'}
               </button>
-              ${obj.waypoints.length >= 2 ? `
-                <button class="btn" onclick="${obj.isFlying ? 'stopFlight' : 'startFlight'}(${obj.id})">
-                  ${obj.isFlying ? 'Stop Flight' : 'Start Flight'}
-                </button>
-              ` : ''}
-              ${obj.waypoints.length > 0 ? `
+              ${obj.waypoints.length > 0 && !obj.isPlanning ? `
+                <button class="btn-small" onclick="executeFlightPlan(${obj.id})">Execute</button>
                 <button class="btn-small danger" onclick="clearFlightPlan(${obj.id})">Clear</button>
               ` : ''}
               <span class="flight-status">${obj.isFlying ? 'FLYING' : obj.isPlanning ? 'PLANNING' : 'READY'}</span>
@@ -2666,7 +2679,7 @@
           let cylinderLon = 0, cylinderLat = 0, cylinderAlt = 0;
           try {
             if (obj.entity?.position) {
-              const cylinderPos = obj.entity.position.getValue(Cesium.JulianDate.now());
+              const cylinderPos = obj.entity.position.getValue(viewer.clock.currentTime);
               if (cylinderPos) {
                 const cylinderCartographic = Cesium.Cartographic.fromCartesian(cylinderPos);
                 cylinderLon = Cesium.Math.toDegrees(cylinderCartographic.longitude);
@@ -2842,7 +2855,13 @@
         obj.isPlanning = false;
         currentPlanningObject = null;
         document.getElementById(`card_${id}`).classList.remove('planning-mode');
+
+        // Resume Cesium animation when exiting planning mode
+        viewer.clock.shouldAnimate = true;
       } else {
+        // Pause Cesium animation when entering planning mode
+        viewer.clock.shouldAnimate = false;
+
         // Stop any other object's planning mode
         objects.forEach(o => {
           o.isPlanning = false;
@@ -2858,18 +2877,11 @@
       updateObjectCards();
     }
 
-    function startFlight(id) {
-      const obj = objects.find(obj => obj.id === id);
-      if (obj) {
-        obj.startFlight();
-        updateObjectCards();
-      }
-    }
 
-    function stopFlight(id) {
+    function executeFlightPlan(id) {
       const obj = objects.find(obj => obj.id === id);
-      if (obj) {
-        obj.stopFlight();
+      if (obj && obj.waypoints.length > 0) {
+        obj.startFlight();
         updateObjectCards();
       }
     }
@@ -3365,8 +3377,7 @@
     window.duplicateObject = duplicateObject;
     window.removeObject = removeObject;
     window.toggleFlightPlanning = toggleFlightPlanning;
-    window.startFlight = startFlight;
-    window.stopFlight = stopFlight;
+    window.executeFlightPlan = executeFlightPlan;
     window.clearFlightPlan = clearFlightPlan;
     window.removeWaypoint = removeWaypoint;
     window.updateFlightSpeed = updateFlightSpeed;
