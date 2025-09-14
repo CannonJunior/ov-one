@@ -169,10 +169,10 @@ window.AircraftConfig = {
           coneOutlineAlpha: 0.6,
           mountPoint: "nose",
           gimbalLimits: {
-            azimuthMin: -70,
-            azimuthMax: 70,
-            elevationMin: -25,
-            elevationMax: 40
+            azimuthMin: -35, //70
+            azimuthMax: 35, //70
+            elevationMin: 0, //-25
+            elevationMax: 90 //40
           }
         }
       }
