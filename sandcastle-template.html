@@ -1123,27 +1123,26 @@
                 return Cesium.Cartesian3.ZERO;
               }
 
-              // Get aircraft position - this will be the back end of the box
+              // Get aircraft position and orientation directly from the aircraft entity
               const aircraftPos = this.parentObject.entity.position.getValue(viewer.clock.currentTime);
-              if (!aircraftPos) {
+              const aircraftOrientation = this.parentObject.entity.orientation.getValue(viewer.clock.currentTime);
+
+              if (!aircraftPos || !aircraftOrientation) {
                 return Cesium.Cartesian3.ZERO;
               }
 
-              // Use aircraft heading to calculate position (simpler approach)
-              const aircraftHeading = this.parentObject.heading || 0;
               const boxLength = this.config.cylinderTopRadius || 500;
 
-              // Create forward vector based on heading (in Cesium coordinate system)
-              const headingRad = Cesium.Math.toRadians(aircraftHeading);
-              const forwardVector = new Cesium.Cartesian3(
-                Math.sin(headingRad) * (boxLength / 2),
-                Math.cos(headingRad) * (boxLength / 2),
-                0
-              );
+              // Use the aircraft's actual orientation matrix
+              const rotationMatrix = Cesium.Matrix3.fromQuaternion(aircraftOrientation);
 
-              // Position box center so the back face starts at aircraft position
-              // Box center needs to be offset by half length forward from aircraft position
-              return Cesium.Cartesian3.add(aircraftPos, forwardVector, new Cesium.Cartesian3());
+              // Forward direction is Y-axis in aircraft coordinate system
+              const forwardDirection = Cesium.Matrix3.getColumn(rotationMatrix, 1, new Cesium.Cartesian3());
+
+              // Position box center so back face center is exactly at aircraft position
+              // Box center = aircraft position + (forward direction * half box length)
+              const offset = Cesium.Cartesian3.multiplyByScalar(forwardDirection, boxLength / 2, new Cesium.Cartesian3());
+              return Cesium.Cartesian3.add(aircraftPos, offset, new Cesium.Cartesian3());
 
             } catch (e) {
               console.warn('Box position callback error:', e);
@@ -1152,25 +1151,9 @@
           }, false),
           orientation: new Cesium.CallbackProperty(() => {
             try {
-              // Get aircraft position for proper coordinate system reference
-              const aircraftPos = this.parentObject.entity.position.getValue(viewer.clock.currentTime);
-              if (!aircraftPos) {
-                return Cesium.Quaternion.IDENTITY;
-              }
-
-              // Use aircraft heading, pitch, and roll
-              const aircraftHeading = this.parentObject.heading || 0;
-              const aircraftPitch = this.parentObject.pitch || 0;
-              const aircraftRoll = this.parentObject.roll || 0;
-
-              const headingRad = Cesium.Math.toRadians(aircraftHeading);
-              const pitchRad = Cesium.Math.toRadians(aircraftPitch);
-              const rollRad = Cesium.Math.toRadians(aircraftRoll);
-
-              return Cesium.Transforms.headingPitchRollQuaternion(
-                aircraftPos,
-                new Cesium.HeadingPitchRoll(headingRad, pitchRad, rollRad)
-              );
+              // Use the aircraft entity's orientation directly
+              const aircraftOrientation = this.parentObject.entity.orientation.getValue(viewer.clock.currentTime);
+              return aircraftOrientation || Cesium.Quaternion.IDENTITY;
             } catch (e) {
               console.warn('Box orientation callback error:', e);
               return Cesium.Quaternion.IDENTITY;
@@ -1200,27 +1183,26 @@
                 return Cesium.Cartesian3.ZERO;
               }
 
-              // Get aircraft position - this will be the back end of the box
+              // Get aircraft position and orientation directly from the aircraft entity
               const aircraftPos = this.parentObject.entity.position.getValue(viewer.clock.currentTime);
-              if (!aircraftPos) {
+              const aircraftOrientation = this.parentObject.entity.orientation.getValue(viewer.clock.currentTime);
+
+              if (!aircraftPos || !aircraftOrientation) {
                 return Cesium.Cartesian3.ZERO;
               }
 
-              // Use aircraft heading to calculate position (simpler approach)
-              const aircraftHeading = this.parentObject.heading || 0;
               const boxLength = this.config.cylinderTopRadius || 500;
 
-              // Create forward vector based on heading (in Cesium coordinate system)
-              const headingRad = Cesium.Math.toRadians(aircraftHeading);
-              const forwardVector = new Cesium.Cartesian3(
-                Math.sin(headingRad) * (boxLength / 2),
-                Math.cos(headingRad) * (boxLength / 2),
-                0
-              );
+              // Use the aircraft's actual orientation matrix
+              const rotationMatrix = Cesium.Matrix3.fromQuaternion(aircraftOrientation);
 
-              // Position box center so the back face starts at aircraft position
-              // Box center needs to be offset by half length forward from aircraft position
-              return Cesium.Cartesian3.add(aircraftPos, forwardVector, new Cesium.Cartesian3());
+              // Forward direction is Y-axis in aircraft coordinate system
+              const forwardDirection = Cesium.Matrix3.getColumn(rotationMatrix, 1, new Cesium.Cartesian3());
+
+              // Position box center so back face center is exactly at aircraft position
+              // Box center = aircraft position + (forward direction * half box length)
+              const offset = Cesium.Cartesian3.multiplyByScalar(forwardDirection, boxLength / 2, new Cesium.Cartesian3());
+              return Cesium.Cartesian3.add(aircraftPos, offset, new Cesium.Cartesian3());
 
             } catch (e) {
               console.warn('Wireframe box position callback error:', e);
@@ -1229,25 +1211,9 @@
           }, false),
           orientation: new Cesium.CallbackProperty(() => {
             try {
-              // Get aircraft position for proper coordinate system reference
-              const aircraftPos = this.parentObject.entity.position.getValue(viewer.clock.currentTime);
-              if (!aircraftPos) {
-                return Cesium.Quaternion.IDENTITY;
-              }
-
-              // Use aircraft heading, pitch, and roll
-              const aircraftHeading = this.parentObject.heading || 0;
-              const aircraftPitch = this.parentObject.pitch || 0;
-              const aircraftRoll = this.parentObject.roll || 0;
-
-              const headingRad = Cesium.Math.toRadians(aircraftHeading);
-              const pitchRad = Cesium.Math.toRadians(aircraftPitch);
-              const rollRad = Cesium.Math.toRadians(aircraftRoll);
-
-              return Cesium.Transforms.headingPitchRollQuaternion(
-                aircraftPos,
-                new Cesium.HeadingPitchRoll(headingRad, pitchRad, rollRad)
-              );
+              // Use the aircraft entity's orientation directly
+              const aircraftOrientation = this.parentObject.entity.orientation.getValue(viewer.clock.currentTime);
+              return aircraftOrientation || Cesium.Quaternion.IDENTITY;
             } catch (e) {
               console.warn('Wireframe box orientation callback error:', e);
               return Cesium.Quaternion.IDENTITY;
