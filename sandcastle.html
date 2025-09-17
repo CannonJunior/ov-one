@@ -406,11 +406,14 @@
     // Multi-Object Tracking System
     Cesium.Ion.defaultAccessToken = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiJmNGU2YTQwYi05ZGFkLTQ5ZWYtOTJlNC0zY2EwNmUzZDA4MGYiLCJpZCI6MzM4ODAyLCJpYXQiOjE3NTcwOTUxMzd9.gDyQcH0fKKNQxGIQjzSyjbQt1tjWDERbZt4eUna9Xbc';
 
-    // Initialize Cesium Viewer
+    // Initialize Cesium Viewer with fallback imagery provider
     const viewer = new Cesium.Viewer("cesiumContainer", {
       shadows: true,
       shouldAnimate: true,
       timeline: true,
+      imageryProvider: new Cesium.OpenStreetMapImageryProvider({
+        url: 'https://a.tile.openstreetmap.org/'
+      })
     });
 
     // Fly to San Francisco startup view
@@ -829,6 +832,9 @@
         this.sensorName = sensorName;
         this.config = { ...sensorConfig };
 
+        // Initialize fillMode to false (wireframe) by default
+        this.config.fillMode = this.config.fillMode || false;
+
         // Operational state
         this.enabled = sensorConfig.enabled;
         this.emissionState = sensorConfig.emissionState; // active, passive, standby
@@ -864,8 +870,8 @@
         const radarColor = Cesium.Color.fromCssColorString(countryStyle.flightPathColor);
 
         // Get cylinder properties from config
-        const coneLength = this.config.cylinderLength || 100000; // meters
-        const coneRadius = this.config.cylinderTopRadius || 50000; // meters (top radius)
+        const coneLength = this.config.cylinderLength || 1000; // meters
+        const coneRadius = this.config.cylinderTopRadius || 500; // meters (top radius)
         const coneBottomRadius = this.config.cylinderBottomRadius || 0; // meters (bottom radius)
 
         // Calculate radar position using configuration parameters
@@ -953,8 +959,8 @@
                   }
 
                   // Get current cylinder properties
-                  const coneLength = this.config.cylinderLength || 100000;
-                  const coneRadius = this.config.cylinderTopRadius || 50000;
+                  const coneLength = this.config.cylinderLength || 1000;
+                  const coneRadius = this.config.cylinderTopRadius || 500;
 
                   // Use same dynamic heading logic as filled cylinder
                   const aircraftHeading = this.parentObject.heading || 0;
@@ -966,6 +972,7 @@
                   const pitchOffset = this.config.cylinderPitch || 0;
                   const rollOffset = this.config.cylinderRoll || 0;
                   const elevationOffset = this.config.cylinderElevation || 0; // Independent elevation angle
+                  const azimuthOffset = this.config.cylinderAzimuth || 0; // Independent azimuth angle
 
                   const finalHeading = aircraftHeading + headingOffset;
                   const finalPitch = aircraftPitch + pitchOffset; // Don't add elevation here
@@ -980,15 +987,17 @@
                     new Cesium.HeadingPitchRoll(headingRad, pitchRad, rollRad)
                   );
 
-                  // Apply elevation tilt to forward vector independently
+                  // Apply both azimuth and elevation offsets to forward vector independently
                   const elevationRad = Cesium.Math.toRadians(elevationOffset);
-                  const localForwardWithElevation = new Cesium.Cartesian3(
-                    0,
-                    Math.cos(elevationRad) * coneLength,  // Forward component reduced by elevation
+                  const azimuthRad = Cesium.Math.toRadians(azimuthOffset);
+
+                  const localForwardWithOffsets = new Cesium.Cartesian3(
+                    Math.sin(azimuthRad) * Math.cos(elevationRad) * coneLength,  // Right component from azimuth
+                    Math.cos(azimuthRad) * Math.cos(elevationRad) * coneLength,  // Forward component reduced by both offsets
                     Math.sin(elevationRad) * coneLength   // Vertical component from elevation
                   );
 
-                  const worldForward = Cesium.Matrix3.multiplyByVector(aircraftMatrix, localForwardWithElevation, new Cesium.Cartesian3());
+                  const worldForward = Cesium.Matrix3.multiplyByVector(aircraftMatrix, localForwardWithOffsets, new Cesium.Cartesian3());
                   const cylinderTopCenter = Cesium.Cartesian3.add(radarPos, worldForward, new Cesium.Cartesian3());
 
                   // Create radial offset in local coordinates, then transform to world
@@ -1016,91 +1025,14 @@
           }));
         }
 
-        // Create cone base circle outline at the far end of the cone with dynamic positioning
-        this.coneCircle = viewer.entities.add({
-          id: `radar_circle_${this.parentObject.id}_${this.sensorName}`,
-          polyline: {
-            positions: new Cesium.CallbackProperty(() => {
-              try {
-                if (!this.parentObject?.entity?.position) {
-                  return [Cesium.Cartesian3.ZERO];
-                }
+        // Create initial radar visualization based on mode
+        this.lastVisualizationMode = this.config.fillMode;
+        if (this.config.fillMode) {
+          this.createFilledBox();
+        } else {
+          this.createWireframeBox();
+        }
 
-                // Get current aircraft position (radar apex)
-                const radarPos = this.parentObject.entity.position.getValue(viewer.clock.currentTime);
-                if (!radarPos) {
-                  return [Cesium.Cartesian3.ZERO];
-                }
-
-                // Get current cylinder properties
-                const coneLength = this.config.cylinderLength || 100000;
-                const coneRadius = this.config.cylinderTopRadius || 50000;
-
-                // Use same dynamic heading logic as filled cylinder
-                const aircraftHeading = this.parentObject.heading || 0;
-                const aircraftPitch = this.parentObject.pitch || 0;
-                const aircraftRoll = this.parentObject.roll || 0;
-
-                // Apply config offsets
-                const headingOffset = this.config.cylinderHeading || 0;
-                const pitchOffset = this.config.cylinderPitch || 0;
-                const rollOffset = this.config.cylinderRoll || 0;
-                const elevationOffset = this.config.cylinderElevation || 0; // Independent elevation angle
-
-                const finalHeading = aircraftHeading + headingOffset;
-                const finalPitch = aircraftPitch + pitchOffset; // Don't add elevation here
-                const finalRoll = aircraftRoll + rollOffset;
-
-                // Create rotation matrix for aircraft orientation (without elevation)
-                const headingRad = Cesium.Math.toRadians(finalHeading);
-                const pitchRad = Cesium.Math.toRadians(finalPitch);
-                const rollRad = Cesium.Math.toRadians(finalRoll);
-
-                const aircraftMatrix = Cesium.Matrix3.fromHeadingPitchRoll(
-                  new Cesium.HeadingPitchRoll(headingRad, pitchRad, rollRad)
-                );
-
-                // Apply elevation tilt to forward vector independently
-                const elevationRad = Cesium.Math.toRadians(elevationOffset);
-                const localForwardWithElevation = new Cesium.Cartesian3(
-                  0,
-                  Math.cos(elevationRad) * coneLength,  // Forward component reduced by elevation
-                  Math.sin(elevationRad) * coneLength   // Vertical component from elevation
-                );
-
-                const worldForward = Cesium.Matrix3.multiplyByVector(aircraftMatrix, localForwardWithElevation, new Cesium.Cartesian3());
-                const cylinderTopCenter = Cesium.Cartesian3.add(radarPos, worldForward, new Cesium.Cartesian3());
-
-                // Generate circle points around the top center, perpendicular to cylinder axis
-                const circlePoints = [];
-                for (let i = 0; i <= 16; i++) {
-                  const angle = (i / 16) * 2 * Math.PI;
-
-                  // Create radial offset in local coordinates (perpendicular to forward axis)
-                  const localRadialOffset = new Cesium.Cartesian3(
-                    Math.cos(angle) * coneRadius,
-                    0,
-                    Math.sin(angle) * coneRadius
-                  );
-                  const worldRadialOffset = Cesium.Matrix3.multiplyByVector(aircraftMatrix, localRadialOffset, new Cesium.Cartesian3());
-
-                  // Final position: top center + radial offset
-                  const circlePosition = Cesium.Cartesian3.add(cylinderTopCenter, worldRadialOffset, new Cesium.Cartesian3());
-                  circlePoints.push(circlePosition);
-                }
-
-                return circlePoints;
-              } catch (e) {
-                console.warn('Circle outline position callback error:', e);
-                return [Cesium.Cartesian3.ZERO];
-              }
-            }, false),
-            width: 2,
-            material: Cesium.Color.PURPLE.withAlpha(outlineAlpha + 0.3),
-            followSurface: false
-          },
-          show: this.emissionState === 'active'
-        });
 
         // Add label at radar cone for identification
         this.radarLabel = viewer.entities.add({
@@ -1132,7 +1064,7 @@
           show: this.emissionState === 'active'
         });
 
-        // Store all outline elements for cleanup (no filled cone)
+        // Store all radar elements for cleanup
         this.radarOutlineElements = [this.coneCircle, this.radarLabel, ...this.coneOutlines];
       }
 
@@ -1141,7 +1073,12 @@
 
         const showRadar = this.emissionState === 'active';
 
-        // No filled cone to update - wireframe only
+        // Check if we need to recreate the radar visualization due to mode change
+        const currentMode = this.config.fillMode;
+        if (this.lastVisualizationMode !== currentMode) {
+          this.recreateRadarVisualization();
+          this.lastVisualizationMode = currentMode;
+        }
 
         if (this.coneCircle) {
           this.coneCircle.show = showRadar;
@@ -1156,6 +1093,178 @@
             outline.show = showRadar;
           });
         }
+      }
+
+      recreateRadarVisualization() {
+        // Remove existing coneCircle
+        if (this.coneCircle) {
+          viewer.entities.remove(this.coneCircle);
+          this.coneCircle = null;
+        }
+
+        // Recreate based on current mode
+        if (this.config.fillMode) {
+          this.createFilledBox();
+        } else {
+          this.createWireframeBox();
+        }
+
+        // Update the radar elements array
+        this.radarOutlineElements = [this.coneCircle, this.radarLabel, ...this.coneOutlines];
+      }
+
+      createFilledBox() {
+        // Create filled box extending from aircraft position in heading direction
+        this.coneCircle = viewer.entities.add({
+          id: `radar_box_${this.parentObject.id}_${this.sensorName}`,
+          position: new Cesium.CallbackProperty(() => {
+            try {
+              if (!this.parentObject?.entity?.position) {
+                return Cesium.Cartesian3.ZERO;
+              }
+
+              // Get aircraft position - this will be the back end of the box
+              const aircraftPos = this.parentObject.entity.position.getValue(viewer.clock.currentTime);
+              if (!aircraftPos) {
+                return Cesium.Cartesian3.ZERO;
+              }
+
+              // Use aircraft heading to calculate position (simpler approach)
+              const aircraftHeading = this.parentObject.heading || 0;
+              const boxLength = this.config.cylinderTopRadius || 500;
+
+              // Create forward vector based on heading (in Cesium coordinate system)
+              const headingRad = Cesium.Math.toRadians(aircraftHeading);
+              const forwardVector = new Cesium.Cartesian3(
+                Math.sin(headingRad) * (boxLength / 2),
+                Math.cos(headingRad) * (boxLength / 2),
+                0
+              );
+
+              // Position box center so the back face starts at aircraft position
+              // Box center needs to be offset by half length forward from aircraft position
+              return Cesium.Cartesian3.add(aircraftPos, forwardVector, new Cesium.Cartesian3());
+
+            } catch (e) {
+              console.warn('Box position callback error:', e);
+              return Cesium.Cartesian3.ZERO;
+            }
+          }, false),
+          orientation: new Cesium.CallbackProperty(() => {
+            try {
+              // Get aircraft position for proper coordinate system reference
+              const aircraftPos = this.parentObject.entity.position.getValue(viewer.clock.currentTime);
+              if (!aircraftPos) {
+                return Cesium.Quaternion.IDENTITY;
+              }
+
+              // Use aircraft heading, pitch, and roll
+              const aircraftHeading = this.parentObject.heading || 0;
+              const aircraftPitch = this.parentObject.pitch || 0;
+              const aircraftRoll = this.parentObject.roll || 0;
+
+              const headingRad = Cesium.Math.toRadians(aircraftHeading);
+              const pitchRad = Cesium.Math.toRadians(aircraftPitch);
+              const rollRad = Cesium.Math.toRadians(aircraftRoll);
+
+              return Cesium.Transforms.headingPitchRollQuaternion(
+                aircraftPos,
+                new Cesium.HeadingPitchRoll(headingRad, pitchRad, rollRad)
+              );
+            } catch (e) {
+              console.warn('Box orientation callback error:', e);
+              return Cesium.Quaternion.IDENTITY;
+            }
+          }, false),
+          box: {
+            dimensions: new Cesium.Cartesian3(
+              50, // width (perpendicular to heading)
+              this.config.cylinderTopRadius || 500, // length (in heading direction)
+              50  // height
+            ),
+            material: Cesium.Color.GREEN.withAlpha(0.5),
+            outline: true,
+            outlineColor: Cesium.Color.BLACK
+          },
+          show: this.emissionState === 'active'
+        });
+      }
+
+      createWireframeBox() {
+        // Create wireframe box outline
+        this.coneCircle = viewer.entities.add({
+          id: `radar_box_wireframe_${this.parentObject.id}_${this.sensorName}`,
+          position: new Cesium.CallbackProperty(() => {
+            try {
+              if (!this.parentObject?.entity?.position) {
+                return Cesium.Cartesian3.ZERO;
+              }
+
+              // Get aircraft position - this will be the back end of the box
+              const aircraftPos = this.parentObject.entity.position.getValue(viewer.clock.currentTime);
+              if (!aircraftPos) {
+                return Cesium.Cartesian3.ZERO;
+              }
+
+              // Use aircraft heading to calculate position (simpler approach)
+              const aircraftHeading = this.parentObject.heading || 0;
+              const boxLength = this.config.cylinderTopRadius || 500;
+
+              // Create forward vector based on heading (in Cesium coordinate system)
+              const headingRad = Cesium.Math.toRadians(aircraftHeading);
+              const forwardVector = new Cesium.Cartesian3(
+                Math.sin(headingRad) * (boxLength / 2),
+                Math.cos(headingRad) * (boxLength / 2),
+                0
+              );
+
+              // Position box center so the back face starts at aircraft position
+              // Box center needs to be offset by half length forward from aircraft position
+              return Cesium.Cartesian3.add(aircraftPos, forwardVector, new Cesium.Cartesian3());
+
+            } catch (e) {
+              console.warn('Wireframe box position callback error:', e);
+              return Cesium.Cartesian3.ZERO;
+            }
+          }, false),
+          orientation: new Cesium.CallbackProperty(() => {
+            try {
+              // Get aircraft position for proper coordinate system reference
+              const aircraftPos = this.parentObject.entity.position.getValue(viewer.clock.currentTime);
+              if (!aircraftPos) {
+                return Cesium.Quaternion.IDENTITY;
+              }
+
+              // Use aircraft heading, pitch, and roll
+              const aircraftHeading = this.parentObject.heading || 0;
+              const aircraftPitch = this.parentObject.pitch || 0;
+              const aircraftRoll = this.parentObject.roll || 0;
+
+              const headingRad = Cesium.Math.toRadians(aircraftHeading);
+              const pitchRad = Cesium.Math.toRadians(aircraftPitch);
+              const rollRad = Cesium.Math.toRadians(aircraftRoll);
+
+              return Cesium.Transforms.headingPitchRollQuaternion(
+                aircraftPos,
+                new Cesium.HeadingPitchRoll(headingRad, pitchRad, rollRad)
+              );
+            } catch (e) {
+              console.warn('Wireframe box orientation callback error:', e);
+              return Cesium.Quaternion.IDENTITY;
+            }
+          }, false),
+          box: {
+            dimensions: new Cesium.Cartesian3(
+              50, // width (perpendicular to heading)
+              this.config.cylinderTopRadius || 500, // length (in heading direction)
+              50  // height
+            ),
+            material: Cesium.Color.TRANSPARENT,
+            outline: true,
+            outlineColor: Cesium.Color.GREEN.withAlpha(0.5)
+          },
+          show: this.emissionState === 'active'
+        });
       }
 
       performScan(allObjects) {
@@ -1330,7 +1439,6 @@
       }
 
       destroy() {
-        // No filled radar cone to clean up - wireframe only
 
         // Clean up cone circle outline
         if (this.coneCircle) {
@@ -2491,11 +2599,11 @@
               <div class="radar-params" style="display: grid; grid-template-columns: 1fr 1fr; gap: 4px; font-size: 10px;">
                 <div>
                   <label style="color: #aaa;">Length:</label>
-                  <input class="editable" style="width: 45px;" value="${obj.radarSystem.getSensor('primary').config.cylinderLength || 100000}" onchange="updateRadarParam(${obj.id}, 'primary', 'cylinderLength', this.value)">m
+                  <input class="editable" style="width: 45px;" value="${obj.radarSystem.getSensor('primary').config.cylinderLength || 1000}" onchange="updateRadarParam(${obj.id}, 'primary', 'cylinderLength', this.value)">m
                 </div>
                 <div>
                   <label style="color: #aaa;">Top Radius:</label>
-                  <input class="editable" style="width: 45px;" value="${obj.radarSystem.getSensor('primary').config.cylinderTopRadius || 50000}" onchange="updateRadarParam(${obj.id}, 'primary', 'cylinderTopRadius', this.value)">m
+                  <input class="editable" style="width: 45px;" value="${obj.radarSystem.getSensor('primary').config.cylinderTopRadius || 500}" onchange="updateRadarParam(${obj.id}, 'primary', 'cylinderTopRadius', this.value)">m
                 </div>
                 <div>
                   <label style="color: #aaa;">Bottom Radius:</label>
@@ -2518,6 +2626,10 @@
                   <input class="editable" style="width: 45px;" value="${obj.radarSystem.getSensor('primary').config.cylinderElevation || 0}" onchange="updateRadarParam(${obj.id}, 'primary', 'cylinderElevation', this.value)">°
                 </div>
                 <div>
+                  <label style="color: #aaa;">Azimuth:</label>
+                  <input class="editable" style="width: 45px;" value="${obj.radarSystem.getSensor('primary').config.cylinderAzimuth || 0}" onchange="updateRadarParam(${obj.id}, 'primary', 'cylinderAzimuth', this.value)">°
+                </div>
+                <div>
                   <label style="color: #aaa;">Alpha:</label>
                   <input class="editable" style="width: 45px;" value="${obj.radarSystem.getSensor('primary').config.positioning?.coneVisualizationAlpha || 0.15}" onchange="updateRadarParam(${obj.id}, 'primary', 'coneVisualizationAlpha', this.value)">
                 </div>
@@ -2525,6 +2637,11 @@
                   <label style="color: #aaa;">Range:</label>
                   <input class="editable" style="width: 45px;" value="${obj.radarSystem.getSensor('primary').config.detectionRange || 100}" onchange="updateRadarParam(${obj.id}, 'primary', 'detectionRange', this.value)">km
                 </div>
+              </div>
+              <div style="margin: 8px 0;">
+                <button class="btn-small" onclick="toggleRadarFillMode(${obj.id}, 'primary')" style="background: ${obj.radarSystem?.getSensor('primary')?.config?.fillMode ? '#4a9eff' : '#666'}; width: 100%; cursor: pointer; border: 1px solid #888;">
+                  ${obj.radarSystem?.getSensor('primary')?.config?.fillMode ? 'Filled (0.25α)' : 'Wireframe'}
+                </button>
               </div>
               <div style="color: #4a9eff; font-size: 11px; margin: 8px 0 4px 0;">POSITION DEBUG</div>
               <div class="position-debug" style="display: grid; grid-template-columns: 1fr; gap: 2px; font-size: 9px;">
@@ -2718,17 +2835,42 @@
               const pitchOffset = sensor.config.cylinderPitch || 0;
               const rollOffset = sensor.config.cylinderRoll || 0;
               const elevationOffset = sensor.config.cylinderElevation || 0;
+              const azimuthOffset = sensor.config.cylinderAzimuth || 0;
 
               const finalHeading = aircraftHeading + headingOffset;
               const finalPitch = aircraftPitch + pitchOffset; // Elevation is separate
               const finalRoll = aircraftRoll + rollOffset;
 
-              // These are the values being used for wireframe orientation
-              cylinderHeading = finalHeading;
-              cylinderPitch = finalPitch;
+              // Calculate the actual direction the central axis is pointing (considering elevation)
+              const headingRad = Cesium.Math.toRadians(finalHeading);
+              const pitchRad = Cesium.Math.toRadians(finalPitch);
+              const rollRad = Cesium.Math.toRadians(finalRoll);
+              const elevationRad = Cesium.Math.toRadians(elevationOffset);
+              const azimuthRad = Cesium.Math.toRadians(azimuthOffset);
+
+              // Create aircraft orientation matrix
+              const aircraftMatrix = Cesium.Matrix3.fromHeadingPitchRoll(
+                new Cesium.HeadingPitchRoll(headingRad, pitchRad, rollRad)
+              );
+
+              // Apply both azimuth and elevation to forward vector
+              const localForwardWithOffsets = new Cesium.Cartesian3(
+                Math.sin(azimuthRad) * Math.cos(elevationRad), // Right component from azimuth
+                Math.cos(azimuthRad) * Math.cos(elevationRad), // Forward component reduced by both
+                Math.sin(elevationRad)  // Vertical component from elevation
+              );
+              const worldForward = Cesium.Matrix3.multiplyByVector(aircraftMatrix, localForwardWithOffsets, new Cesium.Cartesian3());
+
+              // Calculate the actual heading and pitch of the central axis
+              const actualHeading = Math.atan2(worldForward.x, worldForward.y) * 180 / Math.PI;
+              const actualPitch = Math.asin(worldForward.z / Cesium.Cartesian3.magnitude(worldForward)) * 180 / Math.PI;
+
+              // These are the actual directions the central axis is pointing
+              cylinderHeading = actualHeading;
+              cylinderPitch = actualPitch;
               cylinderRoll = finalRoll;
 
-              debugInfo = `AH:${aircraftHeading.toFixed(1)}° HO:${headingOffset.toFixed(1)}° EO:${elevationOffset.toFixed(1)}° WF:YES`;
+              debugInfo = `AH:${aircraftHeading.toFixed(1)}° HO:${headingOffset.toFixed(1)}° EO:${elevationOffset.toFixed(1)}° AO:${azimuthOffset.toFixed(1)}° WF:YES`;
             } else {
               debugInfo = `SENSOR:${!!sensor} NO_SENSOR`;
             }
@@ -3402,6 +3544,114 @@
       obj.setRadarEmissionState(sensorName, nextState);
       updateObjectCards(); // Refresh UI to show new state
     }
+
+    function toggleRadarFillMode(objectId, sensorName) {
+      const obj = objects.find(obj => obj.id === objectId);
+      if (!obj || !obj.radarSystem) {
+        console.warn('toggleRadarFillMode: Object or radar system not found');
+        return;
+      }
+
+      const sensor = obj.radarSystem.getSensor(sensorName);
+      if (!sensor) {
+        console.warn('toggleRadarFillMode: Sensor not found');
+        return;
+      }
+
+      // Toggle between wireframe and filled modes
+      const oldMode = sensor.config.fillMode;
+      sensor.config.fillMode = !sensor.config.fillMode;
+      console.log(`Radar fill mode toggled from ${oldMode} to ${sensor.config.fillMode}`);
+
+      // Trigger radar visualization update
+      sensor.updateVisualization();
+      updateObjectCards(); // Refresh UI to show new state
+    }
+
+    // Make function globally available
+    window.toggleRadarFillMode = toggleRadarFillMode;
+
+    function testBoxOrientation(objectId) {
+      const obj = objects.find(obj => obj.id === objectId);
+      if (!obj || !obj.radarSystem) {
+        console.log('Object or radar system not found');
+        return;
+      }
+
+      const sensor = obj.radarSystem.getSensor('primary');
+      if (!sensor || !sensor.coneCircle) {
+        console.log('Sensor or box entity not found');
+        return;
+      }
+
+      try {
+        // Get current aircraft position and orientation
+        const aircraftPos = obj.entity.position.getValue(viewer.clock.currentTime);
+        const boxEntity = sensor.coneCircle;
+        const boxPos = boxEntity.position.getValue(viewer.clock.currentTime);
+        const boxOrientation = boxEntity.orientation.getValue(viewer.clock.currentTime);
+
+        // Get box dimensions
+        const boxLength = sensor.config.cylinderTopRadius || 500;
+        const boxWidth = 50;
+        const boxHeight = 50;
+
+        // Convert orientation to rotation matrix
+        const rotationMatrix = Cesium.Matrix3.fromQuaternion(boxOrientation);
+
+        // Calculate center points of the two smallest sides (front and back faces)
+        // Back face center (closest to aircraft)
+        const localBackCenter = new Cesium.Cartesian3(0, -boxLength/2, 0);
+        const worldBackCenter = Cesium.Matrix3.multiplyByVector(rotationMatrix, localBackCenter, new Cesium.Cartesian3());
+        const backFaceCenter = Cesium.Cartesian3.add(boxPos, worldBackCenter, new Cesium.Cartesian3());
+
+        // Front face center (farthest from aircraft)
+        const localFrontCenter = new Cesium.Cartesian3(0, boxLength/2, 0);
+        const worldFrontCenter = Cesium.Matrix3.multiplyByVector(rotationMatrix, localFrontCenter, new Cesium.Cartesian3());
+        const frontFaceCenter = Cesium.Cartesian3.add(boxPos, worldFrontCenter, new Cesium.Cartesian3());
+
+        // Convert to geographic coordinates to get altitudes
+        const backGeo = Cesium.Cartographic.fromCartesian(backFaceCenter);
+        const frontGeo = Cesium.Cartographic.fromCartesian(frontFaceCenter);
+        const aircraftGeo = Cesium.Cartographic.fromCartesian(aircraftPos);
+
+        const backAltitude = backGeo.height;
+        const frontAltitude = frontGeo.height;
+        const altitudeDiff = frontAltitude - backAltitude;
+
+        console.log('=== BOX ORIENTATION TEST ===');
+        console.log(`Aircraft Position: Lat ${Cesium.Math.toDegrees(aircraftGeo.latitude).toFixed(6)}°, Lon ${Cesium.Math.toDegrees(aircraftGeo.longitude).toFixed(6)}°, Alt ${aircraftGeo.height.toFixed(2)}m`);
+        console.log(`Aircraft Heading: ${obj.heading?.toFixed(2)}°, Pitch: ${obj.pitch?.toFixed(2)}°, Roll: ${obj.roll?.toFixed(2)}°`);
+        console.log(`Box Center: Lat ${Cesium.Math.toDegrees(Cesium.Cartographic.fromCartesian(boxPos).latitude).toFixed(6)}°, Lon ${Cesium.Math.toDegrees(Cesium.Cartographic.fromCartesian(boxPos).longitude).toFixed(6)}°`);
+        console.log(`Back Face Center Altitude: ${backAltitude.toFixed(2)}m`);
+        console.log(`Front Face Center Altitude: ${frontAltitude.toFixed(2)}m`);
+        console.log(`Altitude Difference (Front - Back): ${altitudeDiff.toFixed(2)}m`);
+
+        if (Math.abs(altitudeDiff) < 1) {
+          console.log('✅ Box has correct pitch (altitude difference < 1m)');
+        } else if (altitudeDiff > 0) {
+          console.log(`❌ Box has positive pitch (nose up) - altitude difference: ${altitudeDiff.toFixed(2)}m`);
+        } else {
+          console.log(`❌ Box has negative pitch (nose down) - altitude difference: ${altitudeDiff.toFixed(2)}m`);
+        }
+
+        // Calculate distance from aircraft to back face center
+        const distanceToBack = Cesium.Cartesian3.distance(aircraftPos, backFaceCenter);
+        console.log(`Distance from aircraft to back face center: ${distanceToBack.toFixed(2)}m`);
+
+        if (distanceToBack < 25) { // Half the box width/height
+          console.log('✅ Back face is close to aircraft position');
+        } else {
+          console.log(`❌ Back face is too far from aircraft position (${distanceToBack.toFixed(2)}m)`);
+        }
+
+      } catch (e) {
+        console.error('Error in box orientation test:', e);
+      }
+    }
+
+    // Make test function globally available
+    window.testBoxOrientation = testBoxOrientation;
 
     function updateRadarParam(objectId, sensorName, paramName, value) {
       const obj = objects.find(obj => obj.id === objectId);

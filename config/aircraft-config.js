@@ -77,6 +77,10 @@ window.AircraftConfig = {
         enabled: true,
         emissionState: "active", // active, passive, standby
 
+        // Cylinder visualization properties
+        cylinderLength: 1000,    // meters
+        cylinderTopRadius: 500,  // meters
+
         // Radar positioning and orientation parameters
         positioning: {
           // Position relative to aircraft center (meters)
@@ -120,6 +124,10 @@ window.AircraftConfig = {
         enabled: false,
         emissionState: "passive",
 
+        // Cylinder visualization properties
+        cylinderLength: 800,     // meters (shorter for secondary)
+        cylinderTopRadius: 400,  // meters
+
         positioning: {
           offsetX: 0,
           offsetY: 5,      // slightly behind primary radar
@@ -144,7 +152,7 @@ window.AircraftConfig = {
       primary: {
         type: "AESA",
         model: "Type 1475 (KLJ-5)",
-        detectionRange: 350, // km for 1m² RCS target
+        detectionRange: 50, // 350 km for 1m² RCS target
         scanCoverage: {
           azimuth: 140, // ±70° total coverage
           elevation: 100 // ±50° total coverage
@@ -156,6 +164,10 @@ window.AircraftConfig = {
         sweepRate: 1.8, // seconds per complete scan
         enabled: true,
         emissionState: "active",
+
+        // Cylinder visualization properties
+        cylinderLength: 1000,    // meters
+        cylinderTopRadius: 500,  // meters
 
         positioning: {
           offsetX: 0,
@@ -193,6 +205,10 @@ window.AircraftConfig = {
         sweepRate: 3.0,
         enabled: true,
         emissionState: "active",
+
+        // Cylinder visualization properties
+        cylinderLength: 1000,    // meters
+        cylinderTopRadius: 500,  // meters
 
         positioning: {
           offsetX: 0,
