@@ -1142,10 +1142,17 @@
 
               // Box is currently extending in 9 o'clock direction (left wing direction)
               // After 90° counterclockwise rotation, it will extend in 12 o'clock direction (nose direction)
-              // Need to translate backward (6 o'clock) by half length to keep right edge at aircraft position
-              const backwardOffset = Cesium.Cartesian3.multiplyByScalar(forwardDirection, -boxLength * 0, new Cesium.Cartesian3());
+              // Offset box in aircraft heading direction by half the box length using X-axis
+              const headingOffset = Cesium.Cartesian3.multiplyByScalar(rightDirection, boxLength / 2, new Cesium.Cartesian3());
 
-              return Cesium.Cartesian3.add(aircraftPos, backwardOffset, new Cesium.Cartesian3());
+              // Additional translation in x-direction by half the aircraft object length (approximately 10m)
+              const aircraftLengthOffset = Cesium.Cartesian3.multiplyByScalar(rightDirection, 10, new Cesium.Cartesian3());
+
+              // Apply both offsets
+              let position = Cesium.Cartesian3.add(aircraftPos, headingOffset, new Cesium.Cartesian3());
+              position = Cesium.Cartesian3.add(position, aircraftLengthOffset, new Cesium.Cartesian3());
+
+              return position;
 
             } catch (e) {
               console.warn('Box position callback error:', e);
@@ -1216,10 +1223,17 @@
 
               // Box is currently extending in 9 o'clock direction (left wing direction)
               // After 90° counterclockwise rotation, it will extend in 12 o'clock direction (nose direction)
-              // Need to translate backward (6 o'clock) by half length to keep right edge at aircraft position
-              const backwardOffset = Cesium.Cartesian3.multiplyByScalar(forwardDirection, -boxLength / 2, new Cesium.Cartesian3());
+              // Offset box in aircraft heading direction by half the box length using X-axis
+              const headingOffset = Cesium.Cartesian3.multiplyByScalar(rightDirection, boxLength / 2, new Cesium.Cartesian3());
 
-              return Cesium.Cartesian3.add(aircraftPos, backwardOffset, new Cesium.Cartesian3());
+              // Additional translation in x-direction by half the aircraft object length (approximately 10m)
+              const aircraftLengthOffset = Cesium.Cartesian3.multiplyByScalar(rightDirection, 10, new Cesium.Cartesian3());
+
+              // Apply both offsets
+              let position = Cesium.Cartesian3.add(aircraftPos, headingOffset, new Cesium.Cartesian3());
+              position = Cesium.Cartesian3.add(position, aircraftLengthOffset, new Cesium.Cartesian3());
+
+              return position;
 
             } catch (e) {
               console.warn('Wireframe box position callback error:', e);
