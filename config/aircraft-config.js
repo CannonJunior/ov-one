@@ -152,7 +152,7 @@ window.AircraftConfig = {
       primary: {
         type: "AESA",
         model: "Type 1475 (KLJ-5)",
-        detectionRange: 50, // 350 km for 1m² RCS target
+        detectionRange: 300, // 300 km for 1m² RCS target
         scanCoverage: {
           azimuth: 140, // ±70° total coverage
           elevation: 100 // ±50° total coverage
@@ -166,8 +166,8 @@ window.AircraftConfig = {
         emissionState: "active",
 
         // Cylinder visualization properties
-        cylinderLength: 1000,    // meters
-        cylinderTopRadius: 500,  // meters
+        cylinderLength: 30000,    // meters
+        cylinderTopRadius: 30000,  // meters
 
         positioning: {
           offsetX: 0,
@@ -181,8 +181,8 @@ window.AircraftConfig = {
           coneOutlineAlpha: 0.6,
           mountPoint: "nose",
           gimbalLimits: {
-            azimuthMin: -35, //70
-            azimuthMax: 35, //70
+            azimuthMin: -70, //70
+            azimuthMax: 70, //70
             elevationMin: 0, //-25
             elevationMax: 90 //40
           }

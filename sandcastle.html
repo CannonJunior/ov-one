@@ -927,8 +927,87 @@
         const coneAlpha = positioning.coneVisualizationAlpha || 0.15;
         const outlineAlpha = positioning.coneOutlineAlpha || 0.5;
 
-        // Filled cylinder removed - using wireframe only
-        this.radarCone = null;
+        // Create solid purple cylinder
+        this.radarCone = viewer.entities.add({
+          id: `radar_cylinder_${this.parentObject.id}_${this.sensorName}`,
+          position: new Cesium.CallbackProperty(() => {
+            try {
+              if (!this.parentObject?.entity?.position) {
+                return Cesium.Cartesian3.ZERO;
+              }
+
+              // Use same positioning logic as green box and wireframe lines
+              const aircraftPos = this.parentObject.entity.position.getValue(viewer.clock.currentTime);
+              const aircraftOrientation = this.parentObject.entity.orientation.getValue(viewer.clock.currentTime);
+
+              if (!aircraftPos || !aircraftOrientation) {
+                return Cesium.Cartesian3.ZERO;
+              }
+
+              const boxLength = this.config.cylinderTopRadius || 500;
+              const aircraftRotationMatrix = Cesium.Matrix3.fromQuaternion(aircraftOrientation);
+              const rightDirection = Cesium.Matrix3.getColumn(aircraftRotationMatrix, 0, new Cesium.Cartesian3());
+
+              // Same offsets as green box and wireframe: heading offset + aircraft length offset
+              const boxHeadingOffset = Cesium.Cartesian3.multiplyByScalar(rightDirection, boxLength / 2, new Cesium.Cartesian3());
+              const aircraftLengthOffset = Cesium.Cartesian3.multiplyByScalar(rightDirection, 10, new Cesium.Cartesian3());
+              const backwardOffset = Cesium.Cartesian3.multiplyByScalar(rightDirection, -boxLength / 2, new Cesium.Cartesian3());
+
+              // Additional forward offset by half cylinder length to align tip with aircraft front
+              const cylinderLength = this.config.cylinderLength || 1000;
+              const forwardOffset = Cesium.Cartesian3.multiplyByScalar(rightDirection, cylinderLength / 2, new Cesium.Cartesian3());
+
+              // Calculate cylinder position
+              let cylinderPos = Cesium.Cartesian3.add(aircraftPos, boxHeadingOffset, new Cesium.Cartesian3());
+              cylinderPos = Cesium.Cartesian3.add(cylinderPos, aircraftLengthOffset, new Cesium.Cartesian3());
+              cylinderPos = Cesium.Cartesian3.add(cylinderPos, backwardOffset, new Cesium.Cartesian3());
+              cylinderPos = Cesium.Cartesian3.add(cylinderPos, forwardOffset, new Cesium.Cartesian3());
+
+              return cylinderPos;
+            } catch (e) {
+              console.warn('Cylinder position callback error:', e);
+              return Cesium.Cartesian3.ZERO;
+            }
+          }, false),
+          orientation: new Cesium.CallbackProperty(() => {
+            try {
+              const aircraftOrientation = this.parentObject.entity.orientation.getValue(viewer.clock.currentTime);
+              if (!aircraftOrientation) {
+                return Cesium.Quaternion.IDENTITY;
+              }
+
+              // First rotate cylinder from Z-axis to X-axis (90 degrees around Y-axis)
+              const cylinderRotation = Cesium.Quaternion.fromAxisAngle(
+                Cesium.Cartesian3.UNIT_Y,
+                Cesium.Math.PI_OVER_TWO
+              );
+
+              // Then apply same heading alignment as wireframe (90 degrees around Z-axis)
+              const headingRotation = Cesium.Quaternion.fromAxisAngle(
+                Cesium.Cartesian3.UNIT_Z,
+                -Cesium.Math.PI_OVER_TWO
+              );
+
+              // Combine aircraft orientation with both rotations
+              let rotatedOrientation = Cesium.Quaternion.multiply(aircraftOrientation, cylinderRotation, new Cesium.Quaternion());
+              rotatedOrientation = Cesium.Quaternion.multiply(rotatedOrientation, headingRotation, new Cesium.Quaternion());
+
+              return rotatedOrientation;
+            } catch (e) {
+              console.warn('Cylinder orientation callback error:', e);
+              return Cesium.Quaternion.IDENTITY;
+            }
+          }, false),
+          cylinder: {
+            length: this.config.cylinderLength || 1000,
+            topRadius: this.config.cylinderTopRadius || 500,
+            bottomRadius: this.config.cylinderBottomRadius || 0,
+            material: Cesium.Color.PURPLE.withAlpha(0.3),
+            outline: true,
+            outlineColor: Cesium.Color.PURPLE.withAlpha(0.7)
+          },
+          show: this.emissionState === 'active'
+        });
 
 
         // Create rotation matrix for all cone geometry
@@ -1059,7 +1138,7 @@
         });
 
         // Store all radar elements for cleanup
-        this.radarOutlineElements = [this.coneCircle, this.radarLabel, ...this.coneOutlines];
+        this.radarOutlineElements = [this.coneCircle, this.radarLabel, this.radarCone, ...this.coneOutlines];
       }
 
       updateVisualization() {
@@ -1647,7 +1726,19 @@
         if (!this.entity) return;
         
         const currentTime = viewer.clock.currentTime;
-        const position = this.entity.position.getValue(currentTime);
+        let position;
+        try {
+          position = this.entity.position.getValue(currentTime);
+          // Validate position is a valid Cartesian3
+          if (!position || !Cesium.Cartesian3.equals(position, position) ||
+              !isFinite(position.x) || !isFinite(position.y) || !isFinite(position.z)) {
+            console.warn('Invalid or undefined position detected for object:', this.id);
+            return; // Skip processing if position is invalid
+          }
+        } catch (e) {
+          console.warn('Error getting entity position:', e);
+          return; // Skip processing if position retrieval fails
+        }
         let previousPosition = null;
         
         // Get previous position for speed calculation
@@ -3572,13 +3663,21 @@
       const pickedPosition = viewer.scene.globe.pick(pick, viewer.scene);
       
       if (pickedPosition) {
-        const cartographic = Cesium.Cartographic.fromCartesian(pickedPosition);
-        const longitude = Cesium.Math.toDegrees(cartographic.longitude);
-        const latitude = Cesium.Math.toDegrees(cartographic.latitude);
-        const altitude = 0; // Default altitude set to 0
+        try {
+          const cartographic = Cesium.Cartographic.fromCartesian(pickedPosition);
+          if (!cartographic) {
+            console.warn('Failed to convert picked position to cartographic');
+            return;
+          }
+          const longitude = Cesium.Math.toDegrees(cartographic.longitude);
+          const latitude = Cesium.Math.toDegrees(cartographic.latitude);
+          const altitude = 0; // Default altitude set to 0
 
-        currentPlanningObject.addWaypoint(longitude, latitude, altitude);
-        updateObjectCards();
+          currentPlanningObject.addWaypoint(longitude, latitude, altitude);
+          updateObjectCards();
+        } catch (e) {
+          console.warn('Error converting picked position to cartographic:', e);
+        }
       }
     }, false);
 
@@ -3618,21 +3717,19 @@
       sensor.config.fillMode = !sensor.config.fillMode;
       console.log(`Radar fill mode toggled from ${oldMode} to ${sensor.config.fillMode}`);
 
-      // Update purple cylinder (coneOutlines) fill and alpha
-      if (sensor.coneOutlines) {
-        sensor.coneOutlines.forEach(outline => {
-          if (outline.polyline) {
-            if (sensor.config.fillMode) {
-              // Filled mode: solid purple with 0.5 alpha (same as green box)
-              outline.polyline.material = Cesium.Color.PURPLE.withAlpha(0.5);
-              outline.polyline.width = 3; // Make lines thicker when filled
-            } else {
-              // Wireframe mode: keep original purple wireframe appearance
-              outline.polyline.material = Cesium.Color.PURPLE.withAlpha(0.5);
-              outline.polyline.width = 1; // Thinner lines for wireframe
-            }
-          }
-        });
+      // Update purple cylinder fill and alpha
+      if (sensor.radarCone && sensor.radarCone.cylinder) {
+        if (sensor.config.fillMode) {
+          // Filled mode: solid purple with 0.5 alpha (same as green box)
+          sensor.radarCone.cylinder.material = Cesium.Color.PURPLE.withAlpha(0.5);
+          sensor.radarCone.cylinder.outline = true;
+          sensor.radarCone.cylinder.outlineColor = Cesium.Color.PURPLE.withAlpha(0.8);
+        } else {
+          // Wireframe mode: transparent fill with purple outline
+          sensor.radarCone.cylinder.material = Cesium.Color.TRANSPARENT;
+          sensor.radarCone.cylinder.outline = true;
+          sensor.radarCone.cylinder.outlineColor = Cesium.Color.PURPLE.withAlpha(0.7);
+        }
       }
 
       // Trigger radar visualization update
