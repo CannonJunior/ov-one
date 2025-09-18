@@ -1136,13 +1136,16 @@
               // Use the aircraft's actual orientation matrix
               const rotationMatrix = Cesium.Matrix3.fromQuaternion(aircraftOrientation);
 
-              // Forward direction is Y-axis in aircraft coordinate system
-              const forwardDirection = Cesium.Matrix3.getColumn(rotationMatrix, 1, new Cesium.Cartesian3());
+              // Get aircraft coordinate system directions
+              const forwardDirection = Cesium.Matrix3.getColumn(rotationMatrix, 1, new Cesium.Cartesian3()); // Y-axis = forward (12 o'clock)
+              const rightDirection = Cesium.Matrix3.getColumn(rotationMatrix, 0, new Cesium.Cartesian3());   // X-axis = right (3 o'clock)
 
-              // Position box center so back face center is exactly at aircraft position
-              // Box center = aircraft position + (forward direction * half box length)
-              const offset = Cesium.Cartesian3.multiplyByScalar(forwardDirection, boxLength / 2, new Cesium.Cartesian3());
-              return Cesium.Cartesian3.add(aircraftPos, offset, new Cesium.Cartesian3());
+              // Box is currently extending in 9 o'clock direction (left wing direction)
+              // After 90° counterclockwise rotation, it will extend in 12 o'clock direction (nose direction)
+              // Need to translate backward (6 o'clock) by half length to keep right edge at aircraft position
+              const backwardOffset = Cesium.Cartesian3.multiplyByScalar(forwardDirection, -boxLength * 0, new Cesium.Cartesian3());
+
+              return Cesium.Cartesian3.add(aircraftPos, backwardOffset, new Cesium.Cartesian3());
 
             } catch (e) {
               console.warn('Box position callback error:', e);
@@ -1151,9 +1154,20 @@
           }, false),
           orientation: new Cesium.CallbackProperty(() => {
             try {
-              // Use the aircraft entity's orientation directly
+              // Use the aircraft entity's orientation with 90-degree counterclockwise rotation
               const aircraftOrientation = this.parentObject.entity.orientation.getValue(viewer.clock.currentTime);
-              return aircraftOrientation || Cesium.Quaternion.IDENTITY;
+              if (!aircraftOrientation) {
+                return Cesium.Quaternion.IDENTITY;
+              }
+
+              // Create 90-degree counterclockwise rotation around Z-axis to rotate from 9 o'clock to 12 o'clock
+              const rotationQuaternion = Cesium.Quaternion.fromAxisAngle(
+                Cesium.Cartesian3.UNIT_Z,
+                Cesium.Math.PI_OVER_TWO
+              );
+
+              // Combine aircraft orientation with 90-degree counterclockwise rotation
+              return Cesium.Quaternion.multiply(aircraftOrientation, rotationQuaternion, new Cesium.Quaternion());
             } catch (e) {
               console.warn('Box orientation callback error:', e);
               return Cesium.Quaternion.IDENTITY;
@@ -1196,13 +1210,16 @@
               // Use the aircraft's actual orientation matrix
               const rotationMatrix = Cesium.Matrix3.fromQuaternion(aircraftOrientation);
 
-              // Forward direction is Y-axis in aircraft coordinate system
-              const forwardDirection = Cesium.Matrix3.getColumn(rotationMatrix, 1, new Cesium.Cartesian3());
+              // Get aircraft coordinate system directions
+              const forwardDirection = Cesium.Matrix3.getColumn(rotationMatrix, 1, new Cesium.Cartesian3()); // Y-axis = forward (12 o'clock)
+              const rightDirection = Cesium.Matrix3.getColumn(rotationMatrix, 0, new Cesium.Cartesian3());   // X-axis = right (3 o'clock)
 
-              // Position box center so back face center is exactly at aircraft position
-              // Box center = aircraft position + (forward direction * half box length)
-              const offset = Cesium.Cartesian3.multiplyByScalar(forwardDirection, boxLength / 2, new Cesium.Cartesian3());
-              return Cesium.Cartesian3.add(aircraftPos, offset, new Cesium.Cartesian3());
+              // Box is currently extending in 9 o'clock direction (left wing direction)
+              // After 90° counterclockwise rotation, it will extend in 12 o'clock direction (nose direction)
+              // Need to translate backward (6 o'clock) by half length to keep right edge at aircraft position
+              const backwardOffset = Cesium.Cartesian3.multiplyByScalar(forwardDirection, -boxLength / 2, new Cesium.Cartesian3());
+
+              return Cesium.Cartesian3.add(aircraftPos, backwardOffset, new Cesium.Cartesian3());
 
             } catch (e) {
               console.warn('Wireframe box position callback error:', e);
@@ -1211,9 +1228,20 @@
           }, false),
           orientation: new Cesium.CallbackProperty(() => {
             try {
-              // Use the aircraft entity's orientation directly
+              // Use the aircraft entity's orientation with 90-degree counterclockwise rotation
               const aircraftOrientation = this.parentObject.entity.orientation.getValue(viewer.clock.currentTime);
-              return aircraftOrientation || Cesium.Quaternion.IDENTITY;
+              if (!aircraftOrientation) {
+                return Cesium.Quaternion.IDENTITY;
+              }
+
+              // Create 90-degree counterclockwise rotation around Z-axis to rotate from 9 o'clock to 12 o'clock
+              const rotationQuaternion = Cesium.Quaternion.fromAxisAngle(
+                Cesium.Cartesian3.UNIT_Z,
+                Cesium.Math.PI_OVER_TWO
+              );
+
+              // Combine aircraft orientation with 90-degree counterclockwise rotation
+              return Cesium.Quaternion.multiply(aircraftOrientation, rotationQuaternion, new Cesium.Quaternion());
             } catch (e) {
               console.warn('Wireframe box orientation callback error:', e);
               return Cesium.Quaternion.IDENTITY;
