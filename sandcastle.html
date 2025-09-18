@@ -952,52 +952,46 @@
                     return [Cesium.Cartesian3.ZERO, Cesium.Cartesian3.ZERO];
                   }
 
-                  // Get current aircraft position (radar apex)
-                  const radarPos = this.parentObject.entity.position.getValue(viewer.clock.currentTime);
-                  if (!radarPos) {
+                  // Get aircraft position and orientation (same as green box positioning)
+                  const aircraftPos = this.parentObject.entity.position.getValue(viewer.clock.currentTime);
+                  const aircraftOrientation = this.parentObject.entity.orientation.getValue(viewer.clock.currentTime);
+
+                  if (!aircraftPos || !aircraftOrientation) {
                     return [Cesium.Cartesian3.ZERO, Cesium.Cartesian3.ZERO];
                   }
+
+                  // Apply same positioning logic as green box
+                  const boxLength = this.config.cylinderTopRadius || 500;
+                  const aircraftRotationMatrix = Cesium.Matrix3.fromQuaternion(aircraftOrientation);
+                  const rightDirection = Cesium.Matrix3.getColumn(aircraftRotationMatrix, 0, new Cesium.Cartesian3());
+
+                  // Same offsets as green box: heading offset + aircraft length offset
+                  const boxHeadingOffset = Cesium.Cartesian3.multiplyByScalar(rightDirection, boxLength / 2, new Cesium.Cartesian3());
+                  const aircraftLengthOffset = Cesium.Cartesian3.multiplyByScalar(rightDirection, 10, new Cesium.Cartesian3());
+
+                  // Move cylinder backward in x-axis by half the green box length (250m)
+                  const backwardOffset = Cesium.Cartesian3.multiplyByScalar(rightDirection, -boxLength / 2, new Cesium.Cartesian3());
+
+                  // Calculate radar position: green box position + backward offset
+                  let radarPos = Cesium.Cartesian3.add(aircraftPos, boxHeadingOffset, new Cesium.Cartesian3());
+                  radarPos = Cesium.Cartesian3.add(radarPos, aircraftLengthOffset, new Cesium.Cartesian3());
+                  radarPos = Cesium.Cartesian3.add(radarPos, backwardOffset, new Cesium.Cartesian3());
 
                   // Get current cylinder properties
                   const coneLength = this.config.cylinderLength || 1000;
                   const coneRadius = this.config.cylinderTopRadius || 500;
 
-                  // Use same dynamic heading logic as filled cylinder
-                  const aircraftHeading = this.parentObject.heading || 0;
-                  const aircraftPitch = this.parentObject.pitch || 0;
-                  const aircraftRoll = this.parentObject.roll || 0;
-
-                  // Apply config offsets
-                  const headingOffset = this.config.cylinderHeading || 0;
-                  const pitchOffset = this.config.cylinderPitch || 0;
-                  const rollOffset = this.config.cylinderRoll || 0;
-                  const elevationOffset = this.config.cylinderElevation || 0; // Independent elevation angle
-                  const azimuthOffset = this.config.cylinderAzimuth || 0; // Independent azimuth angle
-
-                  const finalHeading = aircraftHeading + headingOffset;
-                  const finalPitch = aircraftPitch + pitchOffset; // Don't add elevation here
-                  const finalRoll = aircraftRoll + rollOffset;
-
-                  // Create rotation matrix for aircraft orientation (without elevation)
-                  const headingRad = Cesium.Math.toRadians(finalHeading);
-                  const pitchRad = Cesium.Math.toRadians(finalPitch);
-                  const rollRad = Cesium.Math.toRadians(finalRoll);
-
-                  const aircraftMatrix = Cesium.Matrix3.fromHeadingPitchRoll(
-                    new Cesium.HeadingPitchRoll(headingRad, pitchRad, rollRad)
+                  // Apply 90-degree clockwise rotation to point in 12 o'clock direction
+                  const rotationQuaternion = Cesium.Quaternion.fromAxisAngle(
+                    Cesium.Cartesian3.UNIT_Z,
+                    -Cesium.Math.PI_OVER_TWO
                   );
+                  const rotatedOrientation = Cesium.Quaternion.multiply(aircraftOrientation, rotationQuaternion, new Cesium.Quaternion());
+                  const aircraftMatrix = Cesium.Matrix3.fromQuaternion(rotatedOrientation);
 
-                  // Apply both azimuth and elevation offsets to forward vector independently
-                  const elevationRad = Cesium.Math.toRadians(elevationOffset);
-                  const azimuthRad = Cesium.Math.toRadians(azimuthOffset);
-
-                  const localForwardWithOffsets = new Cesium.Cartesian3(
-                    Math.sin(azimuthRad) * Math.cos(elevationRad) * coneLength,  // Right component from azimuth
-                    Math.cos(azimuthRad) * Math.cos(elevationRad) * coneLength,  // Forward component reduced by both offsets
-                    Math.sin(elevationRad) * coneLength   // Vertical component from elevation
-                  );
-
-                  const worldForward = Cesium.Matrix3.multiplyByVector(aircraftMatrix, localForwardWithOffsets, new Cesium.Cartesian3());
+                  // Use simple forward vector like green box (no additional elevation/azimuth offsets)
+                  const localForward = new Cesium.Cartesian3(0, coneLength, 0); // Forward in Y direction
+                  const worldForward = Cesium.Matrix3.multiplyByVector(aircraftMatrix, localForward, new Cesium.Cartesian3());
                   const cylinderTopCenter = Cesium.Cartesian3.add(radarPos, worldForward, new Cesium.Cartesian3());
 
                   // Create radial offset in local coordinates, then transform to world
@@ -1666,10 +1660,18 @@
         }
         
         if (position) {
-          const cartographic = Cesium.Cartographic.fromCartesian(position);
-          this.longitude = Cesium.Math.toDegrees(cartographic.longitude);
-          this.latitude = Cesium.Math.toDegrees(cartographic.latitude);
-          this.altitude = cartographic.height;
+          try {
+            const cartographic = Cesium.Cartographic.fromCartesian(position);
+            if (cartographic) {
+              this.longitude = Cesium.Math.toDegrees(cartographic.longitude);
+              this.latitude = Cesium.Math.toDegrees(cartographic.latitude);
+              this.altitude = cartographic.height;
+            } else {
+              console.warn('Cartographic conversion failed for position:', position);
+            }
+          } catch (e) {
+            console.warn('Error converting position to cartographic:', e);
+          }
           
           // Calculate speed if we have a previous position
           if (previousPosition && this.isFlying) {
@@ -1864,9 +1866,20 @@
               const nextPos = positions[i + 1];
               
               // Calculate bearing between points (geographic bearing)
-              const currentCart = Cesium.Cartographic.fromCartesian(currentPos);
-              const nextCart = Cesium.Cartographic.fromCartesian(nextPos);
-              
+              let currentCart, nextCart;
+              try {
+                currentCart = Cesium.Cartographic.fromCartesian(currentPos);
+                nextCart = Cesium.Cartographic.fromCartesian(nextPos);
+
+                if (!currentCart || !nextCart) {
+                  console.warn('Failed to convert bearing calculation positions to cartographic');
+                  continue; // Skip this waypoint
+                }
+              } catch (e) {
+                console.warn('Error converting bearing calculation positions:', e);
+                continue; // Skip this waypoint
+              }
+
               const deltaLon = nextCart.longitude - currentCart.longitude;
               const lat1 = currentCart.latitude;
               const lat2 = nextCart.latitude;
@@ -1890,9 +1903,20 @@
           if (i < this.waypoints.length - 1) {
             const currentPos = positions[i];
             const nextPos = positions[i + 1];
-            const currentCart = Cesium.Cartographic.fromCartesian(currentPos);
-            const nextCart = Cesium.Cartographic.fromCartesian(nextPos);
-            
+            let currentCart, nextCart;
+            try {
+              currentCart = Cesium.Cartographic.fromCartesian(currentPos);
+              nextCart = Cesium.Cartographic.fromCartesian(nextPos);
+
+              if (!currentCart || !nextCart) {
+                console.warn('Failed to convert waypoint positions to cartographic');
+                continue; // Skip this waypoint
+              }
+            } catch (e) {
+              console.warn('Error converting waypoint positions:', e);
+              continue; // Skip this waypoint
+            }
+
             const currentAlt = currentCart.height;
             const nextAlt = nextCart.height;
             const distance = Cesium.Cartesian3.distance(currentPos, nextPos);
@@ -2063,8 +2087,25 @@
               Cesium.Cartesian3.lerp(currentWP.position, nextWP.position, factor, basePosition);
               
               // Add perpendicular offset for turn arc
-              const currentCart = Cesium.Cartographic.fromCartesian(currentWP.position);
-              const nextCart = Cesium.Cartographic.fromCartesian(nextWP.position);
+              let currentCart, nextCart;
+              try {
+                currentCart = Cesium.Cartographic.fromCartesian(currentWP.position);
+                nextCart = Cesium.Cartographic.fromCartesian(nextWP.position);
+
+                if (!currentCart || !nextCart) {
+                  console.warn('Failed to convert flight plan positions to cartographic');
+                  // Fall back to straight line interpolation
+                  intermediatePosition = new Cesium.Cartesian3();
+                  Cesium.Cartesian3.lerp(currentWP.position, nextWP.position, factor, intermediatePosition);
+                  continue;
+                }
+              } catch (e) {
+                console.warn('Error converting flight plan positions:', e);
+                // Fall back to straight line interpolation
+                intermediatePosition = new Cesium.Cartesian3();
+                Cesium.Cartesian3.lerp(currentWP.position, nextWP.position, factor, intermediatePosition);
+                continue;
+              }
               
               // Calculate perpendicular direction (simplified for small distances)
               const bearing = Math.atan2(
@@ -2817,10 +2858,16 @@
             if (obj.entity?.position) {
               const cylinderPos = obj.entity.position.getValue(viewer.clock.currentTime);
               if (cylinderPos) {
-                const cylinderCartographic = Cesium.Cartographic.fromCartesian(cylinderPos);
-                cylinderLon = Cesium.Math.toDegrees(cylinderCartographic.longitude);
-                cylinderLat = Cesium.Math.toDegrees(cylinderCartographic.latitude);
-                cylinderAlt = cylinderCartographic.height;
+                try {
+                  const cylinderCartographic = Cesium.Cartographic.fromCartesian(cylinderPos);
+                  if (cylinderCartographic) {
+                    cylinderLon = Cesium.Math.toDegrees(cylinderCartographic.longitude);
+                    cylinderLat = Cesium.Math.toDegrees(cylinderCartographic.latitude);
+                    cylinderAlt = cylinderCartographic.height;
+                  }
+                } catch (e) {
+                  console.warn('Error getting cylinder position:', e);
+                }
               }
             }
           } catch (e) {
@@ -3571,6 +3618,23 @@
       sensor.config.fillMode = !sensor.config.fillMode;
       console.log(`Radar fill mode toggled from ${oldMode} to ${sensor.config.fillMode}`);
 
+      // Update purple cylinder (coneOutlines) fill and alpha
+      if (sensor.coneOutlines) {
+        sensor.coneOutlines.forEach(outline => {
+          if (outline.polyline) {
+            if (sensor.config.fillMode) {
+              // Filled mode: solid purple with 0.5 alpha (same as green box)
+              outline.polyline.material = Cesium.Color.PURPLE.withAlpha(0.5);
+              outline.polyline.width = 3; // Make lines thicker when filled
+            } else {
+              // Wireframe mode: keep original purple wireframe appearance
+              outline.polyline.material = Cesium.Color.PURPLE.withAlpha(0.5);
+              outline.polyline.width = 1; // Thinner lines for wireframe
+            }
+          }
+        });
+      }
+
       // Trigger radar visualization update
       sensor.updateVisualization();
       updateObjectCards(); // Refresh UI to show new state
@@ -3619,9 +3683,20 @@
         const frontFaceCenter = Cesium.Cartesian3.add(boxPos, worldFrontCenter, new Cesium.Cartesian3());
 
         // Convert to geographic coordinates to get altitudes
-        const backGeo = Cesium.Cartographic.fromCartesian(backFaceCenter);
-        const frontGeo = Cesium.Cartographic.fromCartesian(frontFaceCenter);
-        const aircraftGeo = Cesium.Cartographic.fromCartesian(aircraftPos);
+        let backGeo, frontGeo, aircraftGeo;
+        try {
+          backGeo = Cesium.Cartographic.fromCartesian(backFaceCenter);
+          frontGeo = Cesium.Cartographic.fromCartesian(frontFaceCenter);
+          aircraftGeo = Cesium.Cartographic.fromCartesian(aircraftPos);
+
+          if (!backGeo || !frontGeo || !aircraftGeo) {
+            console.log('❌ Failed to convert positions to geographic coordinates');
+            return;
+          }
+        } catch (e) {
+          console.log('❌ Error converting positions to geographic coordinates:', e);
+          return;
+        }
 
         const backAltitude = backGeo.height;
         const frontAltitude = frontGeo.height;
@@ -3630,7 +3705,16 @@
         console.log('=== BOX ORIENTATION TEST ===');
         console.log(`Aircraft Position: Lat ${Cesium.Math.toDegrees(aircraftGeo.latitude).toFixed(6)}°, Lon ${Cesium.Math.toDegrees(aircraftGeo.longitude).toFixed(6)}°, Alt ${aircraftGeo.height.toFixed(2)}m`);
         console.log(`Aircraft Heading: ${obj.heading?.toFixed(2)}°, Pitch: ${obj.pitch?.toFixed(2)}°, Roll: ${obj.roll?.toFixed(2)}°`);
-        console.log(`Box Center: Lat ${Cesium.Math.toDegrees(Cesium.Cartographic.fromCartesian(boxPos).latitude).toFixed(6)}°, Lon ${Cesium.Math.toDegrees(Cesium.Cartographic.fromCartesian(boxPos).longitude).toFixed(6)}°`);
+        try {
+          const boxGeo = Cesium.Cartographic.fromCartesian(boxPos);
+          if (boxGeo) {
+            console.log(`Box Center: Lat ${Cesium.Math.toDegrees(boxGeo.latitude).toFixed(6)}°, Lon ${Cesium.Math.toDegrees(boxGeo.longitude).toFixed(6)}°`);
+          } else {
+            console.log('Box Center: Unable to convert position');
+          }
+        } catch (e) {
+          console.log('Box Center: Error converting position:', e);
+        }
         console.log(`Back Face Center Altitude: ${backAltitude.toFixed(2)}m`);
         console.log(`Front Face Center Altitude: ${frontAltitude.toFixed(2)}m`);
         console.log(`Altitude Difference (Front - Back): ${altitudeDiff.toFixed(2)}m`);
