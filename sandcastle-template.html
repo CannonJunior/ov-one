@@ -403,8 +403,81 @@
   <script src="config/aircraft-config.js"></script>
 
   <script type="module">
+    try {
     // Multi-Object Tracking System
     Cesium.Ion.defaultAccessToken = '{{CESIUM_TOKEN}}';
+
+    // Safe cartographic conversion wrapper
+    function safeCartographicFromCartesian(cartesian, source = 'unknown') {
+      try {
+        if (!cartesian || !Cesium.Cartesian3.equals(cartesian, cartesian) ||
+            !isFinite(cartesian.x) || !isFinite(cartesian.y) || !isFinite(cartesian.z)) {
+          console.warn(`Invalid cartesian input for ${source}:`, cartesian);
+          return null;
+        }
+
+        const result = Cesium.Cartographic.fromCartesian(cartesian);
+
+        if (!result || result.height === undefined || result.height === null || !isFinite(result.height)) {
+          console.warn(`Invalid cartographic result for ${source}:`, result);
+          return null;
+        }
+
+        return result;
+      } catch (error) {
+        console.warn(`Cartographic conversion error for ${source}:`, error);
+        return null;
+      }
+    }
+
+    // Override Cesium's fromCartesian method to add safety
+    const originalFromCartesian = Cesium.Cartographic.fromCartesian;
+    Cesium.Cartographic.fromCartesian = function(cartesian, ellipsoid, result) {
+      try {
+        if (!cartesian || !Cesium.Cartesian3.equals(cartesian, cartesian) ||
+            !isFinite(cartesian.x) || !isFinite(cartesian.y) || !isFinite(cartesian.z)) {
+          console.warn('Cesium.Cartographic.fromCartesian: Invalid cartesian input:', cartesian);
+          return undefined;
+        }
+
+        const conversion = originalFromCartesian.call(this, cartesian, ellipsoid, result);
+
+        if (conversion && (conversion.height === undefined || conversion.height === null || !isFinite(conversion.height))) {
+          console.warn('Cesium.Cartographic.fromCartesian: Invalid height in result:', conversion);
+          return undefined;
+        }
+
+        return conversion;
+      } catch (error) {
+        console.warn('Cesium.Cartographic.fromCartesian: Conversion error:', error);
+        return undefined;
+      }
+    };
+
+    // Global error handler for cartographic conversion issues
+    window.addEventListener('error', function(e) {
+      if (e.message && (e.message.includes('cartesianToCartographic') ||
+                       e.message.includes('height') ||
+                       e.message.includes('fromCartesian') ||
+                       e.message.includes('cartographic'))) {
+        console.warn('Caught cartographic conversion error, preventing crash:', e.message);
+        console.warn('Error details:', e);
+        e.preventDefault();
+        return true;
+      }
+    });
+
+    // Additional unhandled error protection
+    window.addEventListener('unhandledrejection', function(e) {
+      if (e.reason && e.reason.message &&
+          (e.reason.message.includes('cartesianToCartographic') ||
+           e.reason.message.includes('height') ||
+           e.reason.message.includes('fromCartesian') ||
+           e.reason.message.includes('cartographic'))) {
+        console.warn('Caught unhandled promise rejection for cartographic conversion:', e.reason);
+        e.preventDefault();
+      }
+    });
 
     // Initialize Cesium Viewer with fallback imagery provider
     const viewer = new Cesium.Viewer("cesiumContainer", {
@@ -1724,19 +1797,26 @@
 
       updateCalculatedFields() {
         if (!this.entity) return;
-        
+
         const currentTime = viewer.clock.currentTime;
         let position;
         try {
+          // Check if entity position exists and is a valid property
+          if (!this.entity.position || typeof this.entity.position.getValue !== 'function') {
+            console.warn('Entity position property invalid for object:', this.id);
+            return;
+          }
+
           position = this.entity.position.getValue(currentTime);
+
           // Validate position is a valid Cartesian3
           if (!position || !Cesium.Cartesian3.equals(position, position) ||
               !isFinite(position.x) || !isFinite(position.y) || !isFinite(position.z)) {
-            console.warn('Invalid or undefined position detected for object:', this.id);
+            console.warn('Invalid or undefined position detected for object:', this.id, position);
             return; // Skip processing if position is invalid
           }
         } catch (e) {
-          console.warn('Error getting entity position:', e);
+          console.warn('Error getting entity position for object', this.id, ':', e);
           return; // Skip processing if position retrieval fails
         }
         let previousPosition = null;
@@ -1753,15 +1833,19 @@
         if (position) {
           try {
             const cartographic = Cesium.Cartographic.fromCartesian(position);
-            if (cartographic) {
+            if (cartographic && cartographic.height !== undefined && cartographic.height !== null) {
               this.longitude = Cesium.Math.toDegrees(cartographic.longitude);
               this.latitude = Cesium.Math.toDegrees(cartographic.latitude);
               this.altitude = cartographic.height;
             } else {
-              console.warn('Cartographic conversion failed for position:', position);
+              console.warn('Cartographic conversion failed or returned invalid height for position:', position, 'cartographic:', cartographic);
+              // Keep existing values rather than crashing
+              return;
             }
           } catch (e) {
             console.warn('Error converting position to cartographic:', e);
+            // Keep existing values and continue
+            return;
           }
           
           // Calculate speed if we have a previous position
@@ -1962,8 +2046,10 @@
                 currentCart = Cesium.Cartographic.fromCartesian(currentPos);
                 nextCart = Cesium.Cartographic.fromCartesian(nextPos);
 
-                if (!currentCart || !nextCart) {
-                  console.warn('Failed to convert bearing calculation positions to cartographic');
+                if (!currentCart || !nextCart ||
+                    currentCart.height === undefined || nextCart.height === undefined ||
+                    currentCart.height === null || nextCart.height === null) {
+                  console.warn('Failed to convert bearing calculation positions to cartographic or invalid heights');
                   continue; // Skip this waypoint
                 }
               } catch (e) {
@@ -1999,8 +2085,10 @@
               currentCart = Cesium.Cartographic.fromCartesian(currentPos);
               nextCart = Cesium.Cartographic.fromCartesian(nextPos);
 
-              if (!currentCart || !nextCart) {
-                console.warn('Failed to convert waypoint positions to cartographic');
+              if (!currentCart || !nextCart ||
+                  currentCart.height === undefined || nextCart.height === undefined ||
+                  currentCart.height === null || nextCart.height === null) {
+                console.warn('Failed to convert waypoint positions to cartographic or invalid heights');
                 continue; // Skip this waypoint
               }
             } catch (e) {
@@ -2183,8 +2271,10 @@
                 currentCart = Cesium.Cartographic.fromCartesian(currentWP.position);
                 nextCart = Cesium.Cartographic.fromCartesian(nextWP.position);
 
-                if (!currentCart || !nextCart) {
-                  console.warn('Failed to convert flight plan positions to cartographic');
+                if (!currentCart || !nextCart ||
+                    currentCart.height === undefined || nextCart.height === undefined ||
+                    currentCart.height === null || nextCart.height === null) {
+                  console.warn('Failed to convert flight plan positions to cartographic or invalid heights');
                   // Fall back to straight line interpolation
                   intermediatePosition = new Cesium.Cartesian3();
                   Cesium.Cartesian3.lerp(currentWP.position, nextWP.position, factor, intermediatePosition);
@@ -2235,13 +2325,41 @@
         
         // Create position property with enhanced flight path
         const positionProperty = new Cesium.SampledPositionProperty();
+
+        // Add error handling wrapper around the position property
+        const originalGetValue = positionProperty.getValue.bind(positionProperty);
+        positionProperty.getValue = function(time, result) {
+          try {
+            const position = originalGetValue(time, result);
+
+            // If we're past the end of the flight plan, return the last position
+            if (!position) {
+              const lastPosition = enhancedFlightData[enhancedFlightData.length - 1].position;
+              return lastPosition || Cesium.Cartesian3.fromDegrees(this.longitude, this.latitude, this.altitude);
+            }
+
+            // Validate the position
+            if (!isFinite(position.x) || !isFinite(position.y) || !isFinite(position.z)) {
+              console.warn('Invalid position from position property, using fallback');
+              return enhancedFlightData[enhancedFlightData.length - 1].position ||
+                     Cesium.Cartesian3.fromDegrees(this.longitude, this.latitude, this.altitude);
+            }
+
+            return position;
+          } catch (error) {
+            console.warn('Error getting position from position property:', error);
+            return enhancedFlightData[enhancedFlightData.length - 1].position ||
+                   Cesium.Cartesian3.fromDegrees(this.longitude, this.latitude, this.altitude);
+          }
+        }.bind(this);
+
         for (let i = 0; i < enhancedFlightData.length; i++) {
           positionProperty.addSample(
-            Cesium.JulianDate.fromDate(new Date(enhancedFlightData[i].time)), 
+            Cesium.JulianDate.fromDate(new Date(enhancedFlightData[i].time)),
             enhancedFlightData[i].position
           );
         }
-        
+
         positionProperty.setInterpolationOptions({
           interpolationDegree: 1, // Linear interpolation for smoother curves
           interpolationAlgorithm: Cesium.LinearApproximation
@@ -2249,20 +2367,27 @@
 
         // Create dynamic orientation using CallbackProperty with lead-turning
         const orientationProperty = new Cesium.CallbackProperty((time, result) => {
-          const currentTime = Cesium.JulianDate.toDate(time).getTime();
-          let flightPoint = flightData[0];
-          
-          // Find current position in flight plan
-          for (let i = 1; i < flightData.length; i++) {
-            if (currentTime <= flightData[i].time) {
-              const t1 = flightData[i - 1].time;
-              const t2 = flightData[i].time;
-              const factor = (currentTime - t1) / (t2 - t1);
-              
-              const h1 = flightData[i - 1].heading;
-              const h2 = flightData[i].heading;
-              const p1 = flightData[i - 1].pitch;
-              const p2 = flightData[i].pitch;
+          try {
+            const currentTime = Cesium.JulianDate.toDate(time).getTime();
+            let flightPoint = flightData[0];
+
+            // Check if we're past the end of flight plan
+            const lastFlightTime = flightData[flightData.length - 1].time;
+            if (currentTime > lastFlightTime) {
+              // Flight is complete - use the last known orientation
+              flightPoint = flightData[flightData.length - 1];
+            } else {
+              // Find current position in flight plan
+              for (let i = 1; i < flightData.length; i++) {
+                if (currentTime <= flightData[i].time) {
+                  const t1 = flightData[i - 1].time;
+                  const t2 = flightData[i].time;
+                  const factor = (currentTime - t1) / (t2 - t1);
+
+                  const h1 = flightData[i - 1].heading;
+                  const h2 = flightData[i].heading;
+                  const p1 = flightData[i - 1].pitch;
+                  const p2 = flightData[i].pitch;
               
               // Check if we're in a lead-turn
               let inTurn = false;
@@ -2372,22 +2497,57 @@
                 roll: dynamicRoll,
                 position: flightData[i - 1].position
               };
-              break;
+                break;
+              }
+              flightPoint = flightData[i];
             }
-            flightPoint = flightData[i];
           }
-          
+
+          // Validate flightPoint before using it
+          if (!flightPoint || !flightPoint.position) {
+            console.warn('Invalid flight point, using fallback position');
+            // Use last valid position or aircraft's current position as fallback
+            const fallbackPosition = this.entity.position?.getValue(time) ||
+                                   Cesium.Cartesian3.fromDegrees(this.longitude, this.latitude, this.altitude);
+            flightPoint = {
+              heading: this.heading || 0,
+              pitch: this.pitch || 0,
+              roll: this.roll || 0,
+              position: fallbackPosition
+            };
+          }
+
+          // Validate position before creating quaternion
+          if (!flightPoint.position ||
+              !isFinite(flightPoint.position.x) ||
+              !isFinite(flightPoint.position.y) ||
+              !isFinite(flightPoint.position.z)) {
+            console.warn('Invalid position in flight point, using fallback');
+            flightPoint.position = Cesium.Cartesian3.fromDegrees(this.longitude, this.latitude, this.altitude);
+          }
+
           // Convert from geographic to Cesium coordinate system
-          const cesiumHeading = flightPoint.heading - Math.PI / 2; // Subtract 90 degrees
-          
-          // Create quaternion from heading, pitch, roll
+          const cesiumHeading = (flightPoint.heading || 0) - Math.PI / 2; // Subtract 90 degrees
+
+          // Create quaternion from heading, pitch, roll with error handling
           return Cesium.Transforms.headingPitchRollQuaternion(
             flightPoint.position,
-            new Cesium.HeadingPitchRoll(cesiumHeading, flightPoint.pitch, flightPoint.roll),
+            new Cesium.HeadingPitchRoll(cesiumHeading, flightPoint.pitch || 0, flightPoint.roll || 0),
             Cesium.Ellipsoid.WGS84,
             Cesium.Transforms.eastNorthUpToFixedFrame,
             result
           );
+          } catch (error) {
+            console.warn('Error in orientation callback:', error);
+            // Return a default quaternion to prevent crashes
+            return Cesium.Transforms.headingPitchRollQuaternion(
+              Cesium.Cartesian3.fromDegrees(this.longitude, this.latitude, this.altitude),
+              new Cesium.HeadingPitchRoll(0, 0, 0),
+              Cesium.Ellipsoid.WGS84,
+              Cesium.Transforms.eastNorthUpToFixedFrame,
+              result
+            );
+          }
         }, false);
 
         // Apply to entity
@@ -2951,10 +3111,12 @@
               if (cylinderPos) {
                 try {
                   const cylinderCartographic = Cesium.Cartographic.fromCartesian(cylinderPos);
-                  if (cylinderCartographic) {
+                  if (cylinderCartographic && cylinderCartographic.height !== undefined && cylinderCartographic.height !== null) {
                     cylinderLon = Cesium.Math.toDegrees(cylinderCartographic.longitude);
                     cylinderLat = Cesium.Math.toDegrees(cylinderCartographic.latitude);
                     cylinderAlt = cylinderCartographic.height;
+                  } else {
+                    console.warn('Cylinder cartographic conversion failed:', cylinderCartographic);
                   }
                 } catch (e) {
                   console.warn('Error getting cylinder position:', e);
@@ -3126,19 +3288,40 @@
 
     // Real-time updates
     function updateObjects() {
-      objects.forEach(obj => {
-        obj.updateCalculatedFields();
-      });
+      try {
+        objects.forEach(obj => {
+          try {
+            obj.updateCalculatedFields();
+          } catch (e) {
+            console.warn(`Error updating object ${obj.id}:`, e);
+          }
+        });
 
-      // Update radar systems and process detections
-      objects.forEach(obj => {
-        if (obj.radarSystem) {
-          obj.updateRadarSystem(objects);
+        // Update radar systems and process detections
+        objects.forEach(obj => {
+          try {
+            if (obj.radarSystem) {
+              obj.updateRadarSystem(objects);
+            }
+          } catch (e) {
+            console.warn(`Error updating radar for object ${obj.id}:`, e);
+          }
+        });
+
+        try {
+          updateObjectData(); // Only update data, not full HTML regeneration
+        } catch (e) {
+          console.warn('Error updating object data:', e);
         }
-      });
+      } catch (e) {
+        console.warn('Error in updateObjects:', e);
+      }
 
-      updateObjectData(); // Only update data, not full HTML regeneration
-      updateRadarPositionDebug(); // Update radar position debug display
+      try {
+        updateRadarPositionDebug(); // Update radar position debug display
+      } catch (e) {
+        console.warn('Error in updateRadarPositionDebug:', e);
+      }
     }
 
     // Update more frequently for real-time flight data
@@ -3148,13 +3331,27 @@
       return anyFlying ? 200 : 1000; // 5 FPS when flying, 1 FPS when static
     }
 
+    // Wrapped update function with error protection
+    function safeUpdateObjects() {
+      try {
+        updateObjects();
+      } catch (error) {
+        console.warn('Error in update loop, continuing:', error);
+        // Continue running instead of crashing
+      }
+    }
+
     // Start with base interval
-    let updateIntervalId = setInterval(updateObjects, 1000);
+    let updateIntervalId = setInterval(safeUpdateObjects, 1000);
 
     // Dynamic update rate adjustment
     function adjustUpdateRate() {
-      clearInterval(updateIntervalId);
-      updateIntervalId = setInterval(updateObjects, getUpdateInterval());
+      try {
+        clearInterval(updateIntervalId);
+        updateIntervalId = setInterval(safeUpdateObjects, getUpdateInterval());
+      } catch (error) {
+        console.warn('Error adjusting update rate:', error);
+      }
     }
 
     // Check and adjust update rate every 2 seconds
@@ -3665,8 +3862,8 @@
       if (pickedPosition) {
         try {
           const cartographic = Cesium.Cartographic.fromCartesian(pickedPosition);
-          if (!cartographic) {
-            console.warn('Failed to convert picked position to cartographic');
+          if (!cartographic || cartographic.height === undefined || cartographic.height === null) {
+            console.warn('Failed to convert picked position to cartographic or invalid height:', cartographic);
             return;
           }
           const longitude = Cesium.Math.toDegrees(cartographic.longitude);
@@ -3786,8 +3983,10 @@
           frontGeo = Cesium.Cartographic.fromCartesian(frontFaceCenter);
           aircraftGeo = Cesium.Cartographic.fromCartesian(aircraftPos);
 
-          if (!backGeo || !frontGeo || !aircraftGeo) {
-            console.log('❌ Failed to convert positions to geographic coordinates');
+          if (!backGeo || !frontGeo || !aircraftGeo ||
+              backGeo.height === undefined || frontGeo.height === undefined || aircraftGeo.height === undefined ||
+              backGeo.height === null || frontGeo.height === null || aircraftGeo.height === null) {
+            console.log('❌ Failed to convert positions to geographic coordinates or invalid heights');
             return;
           }
         } catch (e) {
@@ -3804,10 +4003,10 @@
         console.log(`Aircraft Heading: ${obj.heading?.toFixed(2)}°, Pitch: ${obj.pitch?.toFixed(2)}°, Roll: ${obj.roll?.toFixed(2)}°`);
         try {
           const boxGeo = Cesium.Cartographic.fromCartesian(boxPos);
-          if (boxGeo) {
+          if (boxGeo && boxGeo.height !== undefined && boxGeo.height !== null) {
             console.log(`Box Center: Lat ${Cesium.Math.toDegrees(boxGeo.latitude).toFixed(6)}°, Lon ${Cesium.Math.toDegrees(boxGeo.longitude).toFixed(6)}°`);
           } else {
-            console.log('Box Center: Unable to convert position');
+            console.log('Box Center: Unable to convert position or invalid height:', boxGeo);
           }
         } catch (e) {
           console.log('Box Center: Error converting position:', e);
@@ -3884,6 +4083,10 @@
     window.testAltitude = testAltitude;
     window.testReset = testReset;
 
+    } catch (globalError) {
+      console.error('Global script error caught:', globalError);
+      console.warn('Application may have limited functionality due to error.');
+    }
   </script>
 
  </div>
