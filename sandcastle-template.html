@@ -1759,6 +1759,11 @@
         // Radar sensor system
         this.radarSystem = null;
 
+        // Missile system
+        this.missiles = [];
+        this.availableMissileTypes = window.AircraftConfig.missileTypes || [];
+        this.missileTargetPaths = new Map(); // Track missile target paths by aircraft ID
+
         this.entity = null;
         this.createEntity();
 
@@ -2704,17 +2709,388 @@
         }
       }
 
+      // Missile management methods
+      launchMissile(missileTypeIndex, targetObject) {
+        if (!this.availableMissileTypes[missileTypeIndex] || !targetObject) {
+          console.warn('Invalid missile type or target for launch');
+          return null;
+        }
+
+        const missileConfig = this.availableMissileTypes[missileTypeIndex];
+
+        // Create missile
+        const missile = new Missile(
+          missileConfig.text,
+          missileConfig.modelUrl,
+          missileConfig.platform,
+          this,
+          targetObject,
+          missileConfig
+        );
+
+        // Try to launch the missile (includes range checking)
+        const launched = missile.launch();
+
+        if (launched) {
+          this.missiles.push(missile);
+          objects.push(missile); // Add to global objects array
+
+          console.log(`${this.callsign} launched ${missileConfig.text} (${missile.callsign}) at ${targetObject.callsign}`);
+          return missile;
+        } else {
+          // Launch failed - clean up missile
+          missile.destroy();
+
+          // Send failure message
+          window.messageBus.publishMessage({
+            source: this.callsign,
+            category: 'TACTICAL',
+            type: 'missile_launch_failed',
+            priority: 'MEDIUM',
+            data: {
+              reason: missile.status,
+              targetId: targetObject.id
+            },
+            description: `${this.callsign} missile launch failed - ${missile.status}`
+          });
+
+          return null;
+        }
+      }
+
+      getMissileStatus() {
+        return this.missiles.map(missile => ({
+          id: missile.id,
+          callsign: missile.callsign,
+          type: missile.type,
+          status: missile.status,
+          distanceToTarget: missile.distanceToTarget,
+          timeToTarget: missile.timeToTarget,
+          fuel: missile.fuel
+        }));
+      }
+
+      updateMissiles() {
+        // Remove missiles that have impacted or stopped
+        this.missiles = this.missiles.filter(missile => {
+          if (!missile.isActive && !missile.isFlying) {
+            // Remove from global objects array
+            const globalIndex = objects.findIndex(obj => obj.id === missile.id);
+            if (globalIndex !== -1) {
+              objects.splice(globalIndex, 1);
+            }
+            missile.destroy();
+            return false;
+          }
+          return true;
+        });
+      }
+
+      // Missile target path visualization methods
+      createMissileTargetPath(targetObject, missileTypeIndex) {
+        if (!targetObject || !this.availableMissileTypes[missileTypeIndex]) return;
+
+        // Remove existing path for this target
+        this.removeMissileTargetPath(targetObject.id);
+
+        const missileConfig = this.availableMissileTypes[missileTypeIndex];
+
+        // Create path from aircraft to target
+        const launchPosition = Cesium.Cartesian3.fromDegrees(
+          this.longitude,
+          this.latitude,
+          this.altitude
+        );
+
+        const targetPosition = Cesium.Cartesian3.fromDegrees(
+          targetObject.longitude,
+          targetObject.latitude,
+          targetObject.altitude
+        );
+
+        // Get country-specific color for missile path
+        const countryStyle = getCountryStyle(this.country);
+        const missilePathColor = Cesium.Color.fromCssColorString(countryStyle.flightPathColor);
+
+        // Create the missile target path visualization
+        const targetPathEntity = viewer.entities.add({
+          id: `missileTargetPath_${this.id}_${targetObject.id}`,
+          name: `${this.callsign} → ${targetObject.callsign} (${missileConfig.text})`,
+          polyline: {
+            positions: [launchPosition, targetPosition],
+            width: 4,
+            material: missilePathColor,
+            clampToGround: false,
+            followSurface: false,
+            // Dashed pattern to show it's a planned missile path
+            dashLength: 16,
+            dashPattern: parseInt('1111000011110000', 2)
+          }
+        });
+
+        // Store the path entity
+        this.missileTargetPaths.set(targetObject.id, targetPathEntity);
+
+        console.log(`Created missile target path from ${this.callsign} to ${targetObject.callsign}`);
+      }
+
+      removeMissileTargetPath(targetId) {
+        const existingPath = this.missileTargetPaths.get(targetId);
+        if (existingPath) {
+          viewer.entities.remove(existingPath);
+          this.missileTargetPaths.delete(targetId);
+        }
+      }
+
+      removeAllMissileTargetPaths() {
+        this.missileTargetPaths.forEach((pathEntity, targetId) => {
+          viewer.entities.remove(pathEntity);
+        });
+        this.missileTargetPaths.clear();
+      }
+
       remove() {
         if (this.radarSystem) {
           this.radarSystem.destroy();
           this.radarSystem = null;
         }
+
+        // Clean up missiles
+        this.missiles.forEach(missile => {
+          // Remove from global objects array
+          const globalIndex = objects.findIndex(obj => obj.id === missile.id);
+          if (globalIndex !== -1) {
+            objects.splice(globalIndex, 1);
+          }
+          missile.destroy();
+        });
+        this.missiles = [];
+
+        // Clean up missile target paths
+        this.removeAllMissileTargetPaths();
+
         if (this.entity) {
           viewer.entities.remove(this.entity);
         }
         if (this.flightPath) {
           viewer.entities.remove(this.flightPath);
         }
+      }
+    }
+
+    // Missile class - extends TrackedObject with target-specific flight planning
+    class Missile extends TrackedObject {
+      constructor(type, modelUrl, platform, launchingAircraft, targetObject, missileConfig) {
+        // Use missile configuration for callsign and country
+        super(type, modelUrl, platform, launchingAircraft.heading, missileConfig.callsign, null);
+
+        // Set launching aircraft's position and orientation
+        this.longitude = launchingAircraft.longitude;
+        this.latitude = launchingAircraft.latitude;
+        this.altitude = launchingAircraft.altitude;
+        this.heading = launchingAircraft.heading;
+
+        // Update the entity position to match launching aircraft
+        this.entity.position = Cesium.Cartesian3.fromDegrees(this.longitude, this.latitude, this.altitude);
+
+        // Missile-specific properties
+        this.launchingAircraft = launchingAircraft;
+        this.targetObject = targetObject;
+        this.missileConfig = missileConfig;
+        this.maxRange = missileConfig.maxRange || 50; // km
+        this.guidanceType = missileConfig.guidanceType || 'Semi-Active';
+        this.warheadType = missileConfig.warheadType || 'High Explosive';
+        this.weight = missileConfig.weight || 100; // kg
+        this.country = missileConfig.country || launchingAircraft.country;
+
+        // Set missile-specific flight speed
+        // Note: Config speed appears to be in knots now (120 for AMRAAM instead of 1200 m/s)
+        this.flightSpeed = missileConfig.speed || 250; // Use speed directly as knots
+
+        // Missile status
+        this.status = "Ready";
+        this.isMissile = true; // Flag to identify as missile
+
+        // Set up waypoint data for flight system (but don't create visual path yet)
+        this.createTargetFlightPlan();
+      }
+
+      createTargetFlightPlan() {
+        // Clear any existing waypoints
+        this.waypoints = [];
+
+        // Add waypoint data without triggering flight path creation
+        this.waypoints.push({
+          longitude: this.targetObject.longitude,
+          latitude: this.targetObject.latitude,
+          altitude: this.targetObject.altitude,
+          speed: this.flightSpeed,
+          heading: undefined,
+          id: Date.now()
+        });
+
+        // Set status
+        this.status = "Target Acquired";
+      }
+
+      createMissilePath() {
+        // Remove existing paths (both missile path and any inherited flight path)
+        if (this.missilePath) {
+          viewer.entities.remove(this.missilePath);
+          this.missilePath = null;
+        }
+
+        // Remove inherited flight path if it exists
+        if (this.flightPath) {
+          viewer.entities.remove(this.flightPath);
+          this.flightPath = null;
+        }
+
+        // Create path from launch position to target
+        const launchPosition = Cesium.Cartesian3.fromDegrees(
+          this.longitude,
+          this.latitude,
+          this.altitude
+        );
+
+        const targetPosition = Cesium.Cartesian3.fromDegrees(
+          this.targetObject.longitude,
+          this.targetObject.latitude,
+          this.targetObject.altitude
+        );
+
+        // Get country-specific color for missile path
+        const countryStyle = getCountryStyle(this.country);
+        const missilePathColor = Cesium.Color.fromCssColorString(countryStyle.flightPathColor);
+
+        // Create the missile path visualization
+        console.log(`Creating missile path for ${this.callsign} from launch to target`);
+
+        this.missilePath = viewer.entities.add({
+          id: `missilePath_${this.id}`,
+          name: `${this.callsign} Missile Path`,
+          polyline: {
+            positions: [launchPosition, targetPosition],
+            width: 5, // Make it thicker for visibility
+            material: missilePathColor,
+            clampToGround: false,
+            followSurface: false,
+            // Make missile path distinguishable from aircraft flight paths
+            dashLength: 16,
+            dashPattern: parseInt('1111000011110000', 2) // Dashed pattern
+          }
+        });
+
+        console.log(`Missile path entity created:`, this.missilePath);
+      }
+
+      launch() {
+        if (this.isFlying) return false;
+
+        // Check if target is within range
+        const launcherPosition = Cesium.Cartesian3.fromDegrees(this.longitude, this.latitude, this.altitude);
+        const targetPosition = Cesium.Cartesian3.fromDegrees(this.targetObject.longitude, this.targetObject.latitude, this.targetObject.altitude);
+        const distanceToTarget = Cesium.Cartesian3.distance(launcherPosition, targetPosition) / 1000; // km
+
+        if (distanceToTarget > this.maxRange) {
+          console.warn(`Target out of range: ${distanceToTarget.toFixed(1)}km > ${this.maxRange}km`);
+          this.status = "Out of Range";
+          return false;
+        }
+
+        // Launch the missile using existing flight system
+        this.startFlight();
+        this.status = "Flying";
+
+        // Send launch message
+        window.messageBus.publishMessage({
+          source: this.launchingAircraft.callsign,
+          category: 'TACTICAL',
+          type: 'missile_launch',
+          priority: 'HIGH',
+          data: {
+            missileId: this.id,
+            missileType: this.type,
+            targetId: this.targetObject.id,
+            launchPosition: {
+              latitude: this.latitude,
+              longitude: this.longitude,
+              altitude: this.altitude
+            }
+          },
+          description: `${this.launchingAircraft.callsign} launched ${this.type} (${this.callsign}) at ${this.targetObject.callsign}`
+        });
+
+        return true;
+      }
+
+      // Override updateFlightData to add missile-specific behavior
+      updateFlightData() {
+        super.updateFlightData();
+
+        if (this.isFlying) {
+          // Check for impact (when missile reaches its waypoint)
+          const targetPosition = Cesium.Cartesian3.fromDegrees(
+            this.targetObject.longitude,
+            this.targetObject.latitude,
+            this.targetObject.altitude
+          );
+
+          const missilePosition = Cesium.Cartesian3.fromDegrees(
+            this.longitude,
+            this.latitude,
+            this.altitude
+          );
+
+          const distanceToTarget = Cesium.Cartesian3.distance(missilePosition, targetPosition) / 1000; // km
+
+          // Impact if within 100m of target
+          if (distanceToTarget < 0.1) {
+            this.impact();
+          }
+        }
+      }
+
+      impact() {
+        this.status = "Impact";
+        this.stopFlight();
+
+        // Send impact message
+        window.messageBus.publishMessage({
+          source: this.callsign,
+          category: 'TACTICAL',
+          type: 'missile_impact',
+          priority: 'HIGH',
+          data: {
+            missileId: this.id,
+            targetId: this.targetObject.id,
+            impactPosition: {
+              latitude: this.latitude,
+              longitude: this.longitude,
+              altitude: this.altitude
+            }
+          },
+          description: `${this.callsign} impacted target ${this.targetObject.callsign}`
+        });
+
+        console.log(`${this.callsign} impacted target ${this.targetObject.callsign}`);
+      }
+
+      // Override updateFlightPath to maintain missile path instead of regular flight path
+      updateFlightPath() {
+        // Don't use inherited flight path - use our missile path instead
+        this.createMissilePath();
+      }
+
+      // Override destroy to add missile-specific cleanup
+      destroy() {
+        // Clean up missile path
+        if (this.missilePath) {
+          viewer.entities.remove(this.missilePath);
+          this.missilePath = null;
+        }
+
+        super.remove(); // Use parent's remove method which handles entity cleanup
       }
     }
 
@@ -2819,19 +3195,20 @@
             </div>
           </div>
 
+          ${obj.waypoints !== undefined ? `
           <div class="flight-planning">
             <div class="flight-controls">
               <button class="btn ${obj.isPlanning ? 'danger' : ''}" onclick="toggleFlightPlanning(${obj.id})">
                 ${obj.isPlanning ? 'Stop Planning' : 'Plan Flight'}
               </button>
-              ${obj.waypoints.length > 0 && !obj.isPlanning ? `
+              ${obj.waypoints && obj.waypoints.length > 0 && !obj.isPlanning ? `
                 <button class="btn-small" onclick="executeFlightPlan(${obj.id})">Execute</button>
                 <button class="btn-small danger" onclick="clearFlightPlan(${obj.id})">Clear</button>
               ` : ''}
               <span class="flight-status">${obj.isFlying ? 'FLYING' : obj.isPlanning ? 'PLANNING' : 'READY'}</span>
             </div>
-            
-            ${obj.waypoints.length > 0 ? `
+
+            ${obj.waypoints && obj.waypoints.length > 0 ? `
               <div class="waypoint-list">
                 ${obj.waypoints.map((wp, index) => `
                   <div class="waypoint-item">
@@ -2874,7 +3251,59 @@
               </div>
             ` : ''}
           </div>
+          ` : ''}
 
+          ${obj.missiles ? `
+          <div class="missile-section">
+            <div style="color: #ff6b47; font-size: 12px; margin-bottom: 8px; border-top: 1px solid #555; padding-top: 10px;">
+              🚀 MISSILE SYSTEMS
+            </div>
+            <div style="display: flex; gap: 8px; margin-bottom: 8px; align-items: center;">
+              <span style="color: #aaa; font-size: 11px;">Active: ${obj.missiles.filter(m => m.isActive).length}</span>
+              <span style="color: #aaa; font-size: 11px;">Available Types: ${obj.availableMissileTypes.length}</span>
+            </div>
+
+            <div class="missile-launch-controls" style="margin-bottom: 10px;">
+              <label style="color: #aaa; font-size: 10px;">Launch Missile:</label>
+              <div style="display: flex; gap: 4px; align-items: center; margin-top: 4px;">
+                <select id="missileType_${obj.id}" style="background: #444; color: white; border: 1px solid #666; font-size: 10px; padding: 2px;">
+                  ${obj.availableMissileTypes.map((missile, index) =>
+                    `<option value="${index}">${missile.text} (${missile.maxRange}km)</option>`
+                  ).join('')}
+                </select>
+                <select id="targetSelect_${obj.id}" style="background: #444; color: white; border: 1px solid #666; font-size: 10px; padding: 2px;" onchange="onMissileTargetSelect(${obj.id}, this.value)">
+                  <option value="">Select Target</option>
+                  ${objects.filter(target => target.id !== obj.id && target.callsign).map(target =>
+                    `<option value="${target.id}">${target.callsign}</option>`
+                  ).join('')}
+                </select>
+                <button class="btn-small" onclick="launchMissileFromUI(${obj.id})" style="background: #ff6b47;">Launch</button>
+              </div>
+            </div>
+
+            ${obj.missiles.length > 0 ? `
+              <div class="missile-status" style="max-height: 120px; overflow-y: auto;">
+                <div style="color: #aaa; font-size: 10px; margin-bottom: 4px;">Active Missiles:</div>
+                ${obj.missiles.map(missile => `
+                  <div style="display: flex; justify-content: space-between; align-items: center; padding: 2px 0; border-bottom: 1px solid #444; font-size: 10px;">
+                    <div>
+                      <div style="color: #ff6b47;">${missile.callsign}</div>
+                      <div style="color: #aaa; font-size: 9px;">${missile.type}</div>
+                    </div>
+                    <div style="text-align: right;">
+                      <div style="color: white;">${missile.status}</div>
+                      <div style="color: #aaa; font-size: 9px;">
+                        ${missile.isFlying ? `${missile.distanceToTarget.toFixed(1)}km | ${missile.timeToTarget.toFixed(0)}s` : ''}
+                      </div>
+                    </div>
+                  </div>
+                `).join('')}
+              </div>
+            ` : ''}
+          </div>
+          ` : ''}
+
+          ${obj.radarSystem ? `
           <div class="radar-section">
             <div style="color: #4a9eff; font-size: 12px; margin-bottom: 8px; border-top: 1px solid #555; padding-top: 10px;">
               📡 RADAR STATUS
@@ -2968,6 +3397,7 @@
               </div>
             ` : ''}
           </div>
+          ` : ''}
           </div>
         </div>
       `;
@@ -3308,6 +3738,17 @@
           }
         });
 
+        // Update missile systems for aircraft
+        objects.forEach(obj => {
+          try {
+            if (obj.missiles && obj.updateMissiles) {
+              obj.updateMissiles();
+            }
+          } catch (e) {
+            console.warn(`Error updating missiles for object ${obj.id}:`, e);
+          }
+        });
+
         try {
           updateObjectData(); // Only update data, not full HTML regeneration
         } catch (e) {
@@ -3416,7 +3857,7 @@
 
     function executeFlightPlan(id) {
       const obj = objects.find(obj => obj.id === id);
-      if (obj && obj.waypoints.length > 0) {
+      if (obj && obj.waypoints && obj.waypoints.length > 0) {
         obj.startFlight();
         updateObjectCards();
       }
@@ -3476,7 +3917,7 @@
 
     function updateWaypointAltitude(objectId, waypointId, newAltitudeFeet) {
       const obj = objects.find(obj => obj.id === objectId);
-      if (obj) {
+      if (obj && obj.waypoints) {
         const waypoint = obj.waypoints.find(wp => wp.id === waypointId);
         if (waypoint) {
           // Convert feet to meters
@@ -3488,7 +3929,7 @@
 
     function updateWaypointSpeed(objectId, waypointId, newSpeed) {
       const obj = objects.find(obj => obj.id === objectId);
-      if (obj) {
+      if (obj && obj.waypoints) {
         const waypoint = obj.waypoints.find(wp => wp.id === waypointId);
         if (waypoint) {
           waypoint.speed = parseFloat(newSpeed) || 250; // Default to 250 knots
@@ -3499,7 +3940,7 @@
 
     function updateWaypointHeading(objectId, waypointId, newHeading) {
       const obj = objects.find(obj => obj.id === objectId);
-      if (obj) {
+      if (obj && obj.waypoints) {
         const waypoint = obj.waypoints.find(wp => wp.id === waypointId);
         if (waypoint) {
           if (newHeading === 'Auto' || newHeading === '' || isNaN(parseFloat(newHeading))) {
@@ -3666,7 +4107,7 @@
     // Individual flight plan functions (kept for backward compatibility)
     function saveFlightPlan(id) {
       const obj = objects.find(obj => obj.id === id);
-      if (!obj || obj.waypoints.length === 0) {
+      if (!obj || !obj.waypoints || obj.waypoints.length === 0) {
         alert('No flight plan to save!');
         return;
       }
@@ -4054,6 +4495,79 @@
       }, 100); // Small delay to allow radar recreation to complete
     }
 
+    // Handle missile target selection changes
+    function onMissileTargetSelect(aircraftId, targetId) {
+      const aircraft = objects.find(obj => obj.id === aircraftId);
+      if (!aircraft || !aircraft.createMissileTargetPath) {
+        return;
+      }
+
+      // Get the selected missile type
+      const missileTypeSelect = document.getElementById(`missileType_${aircraftId}`);
+      if (!missileTypeSelect) {
+        return;
+      }
+      const missileTypeIndex = parseInt(missileTypeSelect.value) || 0;
+
+      // Remove any existing missile target paths for this aircraft
+      aircraft.removeAllMissileTargetPaths();
+
+      // If a target is selected, create the path
+      if (targetId && targetId !== '') {
+        const targetObject = objects.find(obj => obj.id === parseInt(targetId));
+        if (targetObject) {
+          aircraft.createMissileTargetPath(targetObject, missileTypeIndex);
+          console.log(`Created missile target path from ${aircraft.callsign} to ${targetObject.callsign}`);
+        }
+      }
+    }
+
+    // Missile launch function for UI
+    function launchMissileFromUI(aircraftId) {
+      const aircraft = objects.find(obj => obj.id === aircraftId);
+      if (!aircraft || !aircraft.launchMissile) {
+        console.warn('Invalid aircraft for missile launch');
+        return;
+      }
+
+      const missileTypeSelect = document.getElementById(`missileType_${aircraftId}`);
+      const targetSelect = document.getElementById(`targetSelect_${aircraftId}`);
+
+      if (!missileTypeSelect || !targetSelect) {
+        console.warn('Missing missile launch controls');
+        return;
+      }
+
+      const missileTypeIndex = parseInt(missileTypeSelect.value);
+      const targetId = parseInt(targetSelect.value);
+
+      if (isNaN(targetId)) {
+        alert('Please select a target for the missile');
+        return;
+      }
+
+      const targetObject = objects.find(obj => obj.id === targetId);
+      if (!targetObject) {
+        alert('Selected target not found');
+        return;
+      }
+
+      const missile = aircraft.launchMissile(missileTypeIndex, targetObject);
+
+      if (missile) {
+        // Clear the target path since missile is now launched
+        aircraft.removeAllMissileTargetPaths();
+        // Reset target selection
+        targetSelect.value = '';
+        // Refresh UI to show launched missile
+        updateObjectCards();
+
+        alert(`${aircraft.callsign} launched ${missile.type} (${missile.callsign}) at ${targetObject.callsign}`);
+      } else {
+        alert('Missile launch failed - check range and target validity');
+      }
+    }
+
     // Make functions global for onclick handlers
     window.updateObjectField = updateObjectField;
     window.toggleRadarEmission = toggleRadarEmission;
@@ -4082,6 +4596,8 @@
     window.testBankAngle = testBankAngle;
     window.testAltitude = testAltitude;
     window.testReset = testReset;
+    window.onMissileTargetSelect = onMissileTargetSelect;
+    window.launchMissileFromUI = launchMissileFromUI;
 
     } catch (globalError) {
       console.error('Global script error caught:', globalError);

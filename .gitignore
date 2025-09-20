@@ -4,6 +4,9 @@ config.json
 # Generated files (built from template)
 sandcastle.html
 
+# Assets (for now)
+assets/
+
 # Node modules
 node_modules/
 

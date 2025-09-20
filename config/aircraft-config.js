@@ -33,7 +33,7 @@ window.AircraftConfig = {
     },
     {
       text: "J-20 Mighty Dragon",
-      platform: "Fighter", 
+      platform: "Fighter",
       modelUrl: "assets/chengdu_j-20_fighter_v2.glb",
       callsign: "Dragon",
       country: "China"
@@ -47,16 +47,60 @@ window.AircraftConfig = {
     }
   ],
 
+  // Missile types configuration
+  missileTypes: [
+    {
+      text: "AIM-120C AMRAAM",
+      platform: "Air-to-Air Missile",
+      modelUrl: "assets/aim-120c_amraam.glb",
+      callsign: "AMRAAM",
+      country: "USA",
+      maxRange: 120, // km
+      speed: 120, // 1200 m/s (approximately Mach 4)
+      guidanceType: "Active Radar",
+      warheadType: "High Explosive",
+      weight: 152, // kg
+      length: 3.66, // meters
+      diameter: 0.178 // meters
+    },
+    {
+      text: "Generic Missile",
+      platform: "Missile",
+      modelUrl: "assets/missile.glb",
+      callsign: "MSLE",
+      country: "USA",
+      maxRange: 50, // km
+      speed: 800, // m/s
+      guidanceType: "Semi-Active",
+      warheadType: "High Explosive",
+      weight: 100, // kg
+      length: 3.0, // meters
+      diameter: 0.15 // meters
+    }
+  ],
+
   // Platform-specific turn rates (degrees per second)
   platformTurnRates: {
     'Fighter': 20,
     'Bomber': 8,
     'Transport': 5,
-    'UAV': 15
+    'UAV': 15,
+    'Air-to-Air Missile': 45,
+    'Missile': 35
   },
 
   // Callsign counters for generating unique names
   callsignCounters: {},
+
+  // Missile tracking configuration
+  missileTrackingConfig: {
+    trackIntervalSeconds: 6, // Place a tracking dot every 6 seconds
+    trackDotSize: 8, // Size of tracking dots in pixels
+    trackDotColor: "#ff6b47", // Color of tracking dots
+    trackDotAlpha: 0.8, // Transparency of tracking dots
+    showTrackLabels: true, // Show time labels on tracking dots
+    maxTrackDots: 50 // Maximum number of tracking dots per missile
+  },
 
   // Radar system configurations for each aircraft type
   radarSystems: {
